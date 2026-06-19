@@ -1,0 +1,69 @@
+{
+  "name": "Silent DJ Bot",
+  "description": "WhatsApp Bot with auto-session authentication & music features",
+  "logo": "https://i.ibb.co/zWGkw7Jz/767022de0778.png",
+  "keywords": ["whatsapp", "bot", "silent-dj", "baileys", "music"],
+  "repository": "https://github.com/djsilayo665-cpu/silent-dj",
+  "scripts": {
+    "start": "node --no-warnings --experimental-global-webcrypto index.js"
+  },
+  "env": {
+    "SESSION_ID": {
+      "description": "REQUIRED: Your WhatsApp session ID. Generate using pair.js",
+      "value": "",
+      "required": true
+    },
+    "OWNER_NUMBER": {
+      "description": "Your WhatsApp number with country code (no +)",
+      "value": "255768192847",
+      "required": true
+    },
+    "BOT_NAME": {
+      "description": "Name of your bot",
+      "value": "Silent DJ",
+      "required": false
+    },
+    "PREFIX": {
+      "description": "Command prefix (supports multiple: .,@,#,$)",
+      "value": ".,@,#,$",
+      "required": false
+    },
+    "AUTO_READ": {
+      "description": "Auto-read incoming messages",
+      "value": "true",
+      "required": false
+    },
+    "AUTO_REPLY": {
+      "description": "Auto-reply to unknown messages",
+      "value": "false",
+      "required": false
+    },
+    "DATABASE_URL": {
+      "description": "OPTIONAL: PostgreSQL connection string (leave empty for SQLite)",
+      "value": "",
+      "required": false
+    },
+    "PAYMENT_MODE": {
+      "description": "Enable M-Pesa payments (true/false)",
+      "value": "false",
+      "required": false
+    }
+  },
+  "formation": {
+    "worker": {
+      "quantity": 1,
+      "size": "basic"
+    }
+  },
+  "buildpacks": [
+    {
+      "url": "heroku/nodejs"
+    },
+    {
+      "url": "https://github.com/jonathanong/heroku-buildpack-ffmpeg-latest.git"
+    },
+    {
+      "url": "https://github.com/clhuang/heroku-buildpack-webp-binaries.git"
+    }
+  ]
+}
