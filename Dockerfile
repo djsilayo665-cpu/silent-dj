@@ -1,30 +1,19 @@
+# Use a slim Node.js image
 FROM node:22-slim
 
-# Install git, ssh, and build tools
+# Install ONLY the runtime dependencies your bot needs (ffmpeg for media, libwebp for images)
 RUN apt-get update -qq && \
-    apt-get install --no-install-recommends -y \
-    git \
-    openssh-client \
-    build-essential \
-    node-gyp \
-    pkg-config \
-    python-is-python3 && \
-    apt-get clean && \
+    apt-get install --no-install-recommends -y ffmpeg libwebp7 && \
     rm -rf /var/lib/apt/lists/*
 
-# Convert SSH to HTTPS for GitHub
-RUN git config --global url."https://github.com/".insteadOf git@github.com: && \
-    git config --global url."https://".insteadOf git://
-
+# Set the working directory
 WORKDIR /app
 
-# Copy package files first for better caching
+# Copy package files and install dependencies (this caches the layer)
 COPY package*.json ./
+RUN npm install --omit=dev
 
-# Install dependencies
-RUN npm install
-
-# Copy the rest of the application
+# Copy the rest of your application code
 COPY . .
 
 # Start the bot
