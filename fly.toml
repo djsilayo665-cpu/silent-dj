@@ -1,0 +1,11 @@
+app = "silent-dj-okjz-q"
+primary_region = "jnb"
+
+[build]
+  builder = "heroku/buildpacks:20"
+
+[env]
+  NODE_ENV = "production"
+
+[experimental]
+  cmd = ["node", "index.js"]
