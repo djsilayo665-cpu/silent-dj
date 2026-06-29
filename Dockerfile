@@ -4,14 +4,15 @@ FROM node:22-slim
 # Install runtime dependencies including git for npm install
 RUN apt-get update -qq && \
     apt-get install --no-install-recommends -y \
-    git \
-    openssh-client \
     ffmpeg \
-    libwebp7 && \
+    libwebp7 \
+    git \
+    openssh-client && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
 # Configure git to use HTTPS instead of SSH for GitHub
+# This fixes the "ssh not found" error when installing from git URLs
 RUN git config --global url."https://github.com/".insteadOf git@github.com: && \
     git config --global url."https://".insteadOf git://
 
@@ -22,7 +23,7 @@ WORKDIR /app
 COPY package*.json ./
 COPY .npmrc ./
 
-# Install all dependencies
+# Install all dependencies (including dev dependencies if needed)
 RUN npm install
 
 # Copy the rest of your application code
