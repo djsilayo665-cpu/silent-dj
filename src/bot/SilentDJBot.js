@@ -140,3 +140,61 @@ class SilentDJBot {
 }
 
 module.exports = SilentDJBot;
+// Add to the setupTelegramHandlers() method
+
+// Session info command
+this.telegramBot.command('session', async (ctx) => {
+  const userId = ctx.from.id;
+  const metadata = await sessionManager.getSessionMetadata(userId);
+  const hasSession = sessionManager.userHasSession(userId);
+  
+  if (!hasSession) {
+    return await ctx.reply('❌ No active session found. Use `/start` to create one.');
+  }
+  
+  const message = `📱 *Session Info*\n\n` +
+    `Status: ${metadata?.status || 'Unknown'}\n` +
+    `Created: ${metadata?.createdAt ? new Date(metadata.createdAt).toLocaleString() : 'Unknown'}\n` +
+    `Last Updated: ${metadata?.updatedAt ? new Date(metadata.updatedAt).toLocaleString() : 'Unknown'}\n` +
+    `Session Path: ${sessionManager.getUserSessionPath(userId)}`;
+  
+  await ctx.reply(message);
+});
+
+// Clear session command (if session gets corrupted)
+this.telegramBot.command('clearsession', async (ctx) => {
+  const userId = ctx.from.id;
+  
+  // Check if user is admin (optional - add your admin ID)
+  // const isAdmin = userId === parseInt(process.env.ADMIN_ID);
+  // if (!isAdmin) return await ctx.reply('❌ Only admins can use this command.');
+  
+  const hasSession = sessionManager.userHasSession(userId);
+  if (!hasSession) {
+    return await ctx.reply('❌ No session found.');
+  }
+  
+  await sessionManager.deleteUserSession(userId);
+  this.whatsappConnections.delete(userId);
+  this.userData.delete(userId);
+  
+  await ctx.reply('✅ Session cleared. Use `/start` to create a new one.');
+});
+
+// Admin: View all sessions
+this.telegramBot.command('sessions', async (ctx) => {
+  // Check if user is admin
+  const isAdmin = userId === parseInt(process.env.ADMIN_ID);
+  if (!isAdmin) return await ctx.reply('❌ Only admins can view all sessions.');
+  
+  const stats = sessionManager.getSessionStats();
+  
+  let message = `📊 *All Sessions*\n\n`;
+  message += `Total: ${stats.totalUsers}\n`;
+  message += `Connected: ${stats.connected}\n`;
+  message += `Pending: ${stats.pending}\n`;
+  message += `Disconnected: ${stats.disconnected}\n\n`;
+  message += `Users: ${stats.users.join(', ') || 'None'}`;
+  
+  await ctx.reply(message);
+});
