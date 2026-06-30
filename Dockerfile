@@ -7,29 +7,25 @@ RUN apt-get update -qq && \
     libwebp7 \
     git \
     openssh-client \
-    ca-certificates \
-    curl \
-    build-essential && \
+    ca-certificates && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Force git to use HTTPS instead of SSH for GitHub
+# Configure git to use HTTPS for GitHub (simplified)
 RUN git config --global url."https://github.com/".insteadOf git@github.com: && \
-    git config --global url."https://".insteadOf ssh://git@github.com/ && \
-    git config --global url."https://github.com/".insteadOf ssh://git@github.com && \
-    git config --global http.sslVerify true
+    git config --global url."https://github.com/".insteadOf ssh://git@github.com:
 
 # Set working directory
 WORKDIR /app
 
 # Copy npmrc first (important!)
-COPY .npmrc .npmrc
+COPY .npmrc* ./
 
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies with verbose output for debugging
-RUN npm install --loglevel=verbose
+# Install dependencies
+RUN npm install
 
 # Copy the rest of the application
 COPY . .
