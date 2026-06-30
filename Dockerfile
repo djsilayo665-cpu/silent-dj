@@ -1,32 +1,34 @@
-# Use a slim Node.js image
 FROM node:22-slim
 
-# Install runtime dependencies including git for npm install
+# Install git and other dependencies
 RUN apt-get update -qq && \
     apt-get install --no-install-recommends -y \
     ffmpeg \
     libwebp7 \
     git \
-    openssh-client && \
+    openssh-client \
+    ca-certificates && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Configure git to use HTTPS instead of SSH for GitHub
-# This fixes the "ssh not found" error when installing from git URLs
+# Force git to use HTTPS for GitHub
 RUN git config --global url."https://github.com/".insteadOf git@github.com: && \
-    git config --global url."https://".insteadOf git://
+    git config --global url."https://".insteadOf ssh://git@github.com/ && \
+    git config --global url."https://github.com/".insteadOf ssh://git@github.com
 
-# Set the working directory
+# Set working directory
 WORKDIR /app
 
-# Copy package files and install dependencies
+# Copy npmrc first
+COPY .npmrc .npmrc
+
+# Copy package files
 COPY package*.json ./
-COPY .npmrc ./
 
-# Install all dependencies (including dev dependencies if needed)
-RUN npm install
+# Install dependencies with verbose output
+RUN npm install --loglevel=verbose
 
-# Copy the rest of your application code
+# Copy the rest of the application
 COPY . .
 
 # Start the bot
