@@ -1,4 +1,4 @@
-// index.js - Silent DJ Bot (WhatsApp + Telegram)
+// index.js - Silent DJ Bot (WhatsApp + Telegram) with Pairing Code
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
@@ -6,13 +6,13 @@ const fs = require('fs-extra');
 const axios = require('axios');
 const moment = require('moment-timezone');
 const ytSearch = require('yt-search');
-const qrcode = require('qrcode-terminal');
 
 // ============ CONFIGURATION ============
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const OWNER_ID = parseInt(process.env.OWNER_ID || '0');
 const BOT_NAME = process.env.BOT_NAME || 'Silent DJ';
 const BOT_PREFIX = process.env.BOT_PREFIX || '.';
+const WHATSAPP_NUMBER = process.env.WHATSAPP_NUMBER || ''; // Your phone number with country code
 
 // ============ TELEGRAM BOT ============
 const telegramBot = new Telegraf(TELEGRAM_TOKEN);
@@ -20,6 +20,7 @@ const telegramBot = new Telegraf(TELEGRAM_TOKEN);
 // ============ WHATSAPP CONNECTION ============
 let whatsappSock = null;
 let whatsappConnected = false;
+let pairingCode = '';
 
 async function connectWhatsApp() {
     console.log('📱 Connecting to WhatsApp...');
@@ -29,26 +30,66 @@ async function connectWhatsApp() {
         
         const sock = makeWASocket({
             auth: state,
-            printQRInTerminal: true,
+            printQRInTerminal: false, // Disable QR code
             browser: ['Silent DJ', 'Chrome', '120.0.0.0'],
             connectTimeoutMs: 30000,
             defaultQueryTimeoutMs: 30000,
+            // Enable pairing code
+            generatePairingCode: true,
         });
 
         sock.ev.on('creds.update', saveCreds);
 
-        sock.ev.on('connection.update', (update) => {
+        // Handle connection updates
+        sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr } = update;
             
+            // If QR code is generated (fallback), show it
             if (qr) {
-                console.log('📱 Scan this QR code with WhatsApp:');
-                qrcode.generate(qr, { small: true });
+                console.log('📱 QR Code (fallback):', qr);
+            }
+            
+            // Generate pairing code
+            if (update.pairingCode) {
+                pairingCode = update.pairingCode;
+                console.log(`🔑 PAIRING CODE: ${pairingCode}`);
+                console.log(`📱 Open WhatsApp → Settings → Linked Devices → Link a Device`);
+                console.log(`📱 Enter this code: ${pairingCode}`);
+                
+                // Send pairing code to Telegram owner
+                if (TELEGRAM_TOKEN && OWNER_ID) {
+                    try {
+                        await telegramBot.telegram.sendMessage(
+                            OWNER_ID,
+                            `🔑 *WhatsApp Pairing Code*\n\n` +
+                            `Your pairing code is:\n\`\`\`${pairingCode}\`\`\`\n\n` +
+                            `1. Open WhatsApp on your phone\n` +
+                            `2. Go to Settings → Linked Devices → Link a Device\n` +
+                            `3. Enter the code above\n` +
+                            `4. Wait for connection...`
+                        );
+                    } catch (e) {
+                        console.log('⚠️ Could not send pairing code to Telegram');
+                    }
+                }
             }
             
             if (connection === 'open') {
                 whatsappConnected = true;
                 console.log('✅ WhatsApp connected successfully!');
                 console.log(`📱 Bot is ready on WhatsApp!`);
+                
+                // Notify owner on Telegram
+                if (TELEGRAM_TOKEN && OWNER_ID) {
+                    try {
+                        await telegramBot.telegram.sendMessage(
+                            OWNER_ID,
+                            `✅ *WhatsApp Connected!*\n\n` +
+                            `Your WhatsApp is now linked to ${BOT_NAME}!\n` +
+                            `You can now use commands like ${BOT_PREFIX}play`
+                        );
+                    } catch (e) {}
+                }
             }
             
             if (connection === 'close') {
@@ -78,58 +119,78 @@ async function connectWhatsApp() {
     }
 }
 
-// ============ MESSAGE HANDLERS ============
+// ============ GENERATE PAIRING CODE MANUALLY ============
+async function generatePairingCode(phoneNumber) {
+    try {
+        console.log(`🔑 Generating pairing code for ${phoneNumber}...`);
+        
+        const { state, saveCreds } = await useMultiFileAuthState('./session');
+        
+        const sock = makeWASocket({
+            auth: state,
+            printQRInTerminal: false,
+            browser: ['Silent DJ', 'Chrome', '120.0.0.0'],
+            generatePairingCode: true,
+        });
 
-// Handle WhatsApp messages
+        // Wait for pairing code
+        sock.ev.on('creds.update', saveCreds);
+        
+        sock.ev.on('connection.update', async (update) => {
+            if (update.pairingCode) {
+                const code = update.pairingCode;
+                console.log(`\n🔑 PAIRING CODE: ${code}`);
+                console.log(`📱 WhatsApp: Settings → Linked Devices → Link a Device`);
+                console.log(`📱 Enter this code: ${code}\n`);
+                
+                // Send to Telegram owner
+                if (TELEGRAM_TOKEN && OWNER_ID) {
+                    try {
+                        await telegramBot.telegram.sendMessage(
+                            OWNER_ID,
+                            `🔑 *WhatsApp Pairing Code*\n\n` +
+                            `\`\`\`${code}\`\`\`\n\n` +
+                            `1. Open WhatsApp → Settings → Linked Devices → Link a Device\n` +
+                            `2. Enter code: ${code}`
+                        );
+                    } catch (e) {}
+                }
+            }
+        });
+
+        return sock;
+    } catch (error) {
+        console.error('❌ Error generating pairing code:', error);
+    }
+}
+
+// ============ MESSAGE HANDLERS ============
 async function handleWhatsAppMessage(msg, sock) {
     try {
         let messageText = '';
         let sender = msg.key.remoteJid;
         
-        // Extract text
         if (msg.message.conversation) {
             messageText = msg.message.conversation;
         } else if (msg.message.extendedTextMessage?.text) {
             messageText = msg.message.extendedTextMessage.text;
-        } else if (msg.message.imageMessage?.caption) {
-            messageText = msg.message.imageMessage.caption;
         }
         
         if (!messageText) return;
         
-        console.log(`📩 WhatsApp message from ${sender}: ${messageText}`);
-        
-        // Process command
+        console.log(`📩 WhatsApp: ${messageText}`);
         const response = await processCommand(messageText, 'whatsapp', sender);
         
         if (response) {
             await sock.sendMessage(sender, { text: response });
         }
     } catch (error) {
-        console.error('❌ Error handling WhatsApp message:', error);
+        console.error('❌ WhatsApp message error:', error);
     }
 }
 
-// Handle Telegram messages
-telegramBot.on('text', async (ctx) => {
-    try {
-        const messageText = ctx.message.text;
-        const userId = ctx.from.id;
-        
-        const response = await processCommand(messageText, 'telegram', userId);
-        
-        if (response) {
-            await ctx.reply(response);
-        }
-    } catch (error) {
-        console.error('❌ Error handling Telegram message:', error);
-        ctx.reply('❌ An error occurred. Please try again.');
-    }
-});
-
 // ============ COMMAND PROCESSOR ============
 async function processCommand(text, platform, userId) {
-    // Remove prefix if present
     let command = text;
     if (text.startsWith(BOT_PREFIX)) {
         command = text.substring(1);
@@ -146,59 +207,31 @@ async function processCommand(text, platform, userId) {
         try {
             const result = await ytSearch(args);
             if (!result || !result.videos || result.videos.length === 0) {
-                return '❌ No results found for this song.';
+                return '❌ No results found.';
             }
-            
             const video = result.videos[0];
-            return `🎵 *Now Playing: ${video.title}*\n` +
-                   `👤 Artist: ${video.author.name}\n` +
-                   `⏱️ Duration: ${video.duration.timestamp}\n` +
-                   `🔗 ${video.url}`;
+            return `🎵 *${video.title}*\n👤 ${video.author.name}\n⏱️ ${video.duration.timestamp}\n🔗 ${video.url}`;
         } catch (error) {
-            return '❌ Error searching for song. Please try again.';
+            return '❌ Error searching. Please try again.';
         }
     }
     
     if (cmd === 'help' || cmd === 'h') {
-        return getHelpText(platform);
+        return getHelpText();
     }
     
-    if (cmd === 'menu') {
-        return getMenuText(platform);
-    }
-    
-    // ============ UTILITY COMMANDS ============
     if (cmd === 'ping') {
-        return '🏓 Pong! Bot is alive ✅';
+        return '🏓 Pong! ✅';
     }
     
     if (cmd === 'time') {
         const now = moment();
-        return `🕐 *Current Time*\n` +
-               `📅 Date: ${now.format('MMMM D, YYYY')}\n` +
-               `🕐 Time: ${now.format('h:mm:ss A')}\n` +
-               `🌍 Timezone: UTC`;
+        return `🕐 ${now.format('h:mm:ss A')}\n📅 ${now.format('MMMM D, YYYY')}`;
     }
     
-    if (cmd === 'info') {
-        return `📊 *${BOT_NAME} Bot*\n\n` +
-               `🤖 Platform: ${platform}\n` +
-               `📦 Version: 2.0.0\n` +
-               `✅ Status: Online\n` +
-               `🎵 Music | 🤖 AI | 🎮 Games | 🛠️ Utility`;
-    }
-    
-    // ============ AI COMMANDS ============
-    if (cmd === 'ai') {
-        if (!args) return '🤖 Please ask a question!\nExample: `.ai What is AI?`';
-        return `🤖 *You asked:* "${args}"\n\n*(AI feature coming soon!)*`;
-    }
-    
-    // ============ GAME COMMANDS ============
     if (cmd === 'dice') {
         const result = Math.floor(Math.random() * 6) + 1;
-        const emojis = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
-        return `🎲 You rolled: *${result}* ${emojis[result - 1]}`;
+        return `🎲 Rolled: *${result}*`;
     }
     
     if (cmd === 'coinflip' || cmd === 'coin') {
@@ -206,107 +239,52 @@ async function processCommand(text, platform, userId) {
         return `🪙 *${result}!*`;
     }
     
-    if (cmd === 'joke') {
-        try {
-            const response = await axios.get('https://official-joke-api.appspot.com/random_joke');
-            const joke = response.data;
-            return `😂 *${joke.setup}*\n\n${joke.punchline}`;
-        } catch {
-            return '😂 Why don\'t scientists trust atoms? Because they make up everything!';
-        }
+    if (cmd === 'info') {
+        return `🎵 *${BOT_NAME}*\n📱 Platform: ${platform}\n✅ Status: Online\n📦 Version: 2.0.0`;
     }
     
-    // ============ GROUP MANAGEMENT (Telegram only) ============
-    if (platform === 'telegram') {
-        // These only work on Telegram
-        if (cmd === 'kick' || cmd === 'ban' || cmd === 'promote' || cmd === 'mute') {
-            return '👥 *Group Management*\n\n' +
-                   'To use this command on Telegram:\n' +
-                   '1. Reply to a user\'s message\n' +
-                   '2. Type the command\n' +
-                   '3. Example: `/kick` (reply to user)';
-        }
-    }
-    
-    // ============ HELP FOR WHATSAPP ============
-    if (platform === 'whatsapp' && cmd === 'start') {
-        return `🎵 *${BOT_NAME} Bot*\n\n` +
-               `Welcome to ${BOT_NAME}!\n` +
-               `Type .help to see available commands.`;
-    }
-    
-    // Unknown command
-    return `❌ Unknown command: ${cmd}\n\nType ${BOT_PREFIX}help to see available commands.`;
+    return `❌ Unknown command: ${cmd}\nType ${BOT_PREFIX}help for commands.`;
 }
 
 // ============ HELP TEXT ============
-function getHelpText(platform) {
-    const prefix = BOT_PREFIX;
-    
-    let text = `🎵 *${BOT_NAME} Bot - Help*\n\n`;
-    text += `*Music Commands*\n`;
-    text += `${prefix}play <song> - Play a song\n`;
-    text += `${prefix}p <song> - Short for play\n\n`;
-    
-    text += `*Game Commands*\n`;
-    text += `${prefix}dice - Roll a dice\n`;
-    text += `${prefix}coinflip - Flip a coin\n`;
-    text += `${prefix}joke - Random joke\n\n`;
-    
-    text += `*Utility Commands*\n`;
-    text += `${prefix}ping - Check bot status\n`;
-    text += `${prefix}time - Current time\n`;
-    text += `${prefix}info - Bot info\n`;
-    text += `${prefix}menu - Show menu\n\n`;
-    
-    text += `*AI Commands*\n`;
-    text += `${prefix}ai <question> - Ask AI\n`;
-    
-    if (platform === 'telegram') {
-        text += `\n*Group Commands (Telegram only)*\n`;
-        text += `/kick - Kick user (reply)\n`;
-        text += `/ban - Ban user (reply)\n`;
-        text += `/promote - Promote user (reply)\n`;
-        text += `/mute - Mute user (reply)`;
-    }
-    
-    return text;
-}
-
-function getMenuText(platform) {
-    const prefix = BOT_PREFIX;
-    
-    let text = `🎵 *${BOT_NAME} Menu*\n\n`;
-    text += `🎵 *Music*\n`;
-    text += `${prefix}play <song>\n\n`;
-    
-    text += `🎮 *Games*\n`;
-    text += `${prefix}dice · ${prefix}coinflip · ${prefix}joke\n\n`;
-    
-    text += `🛠️ *Utility*\n`;
-    text += `${prefix}ping · ${prefix}time · ${prefix}info\n\n`;
-    
-    text += `🤖 *AI*\n`;
-    text += `${prefix}ai <question>\n\n`;
-    
-    text += `📱 *Platform*\n`;
-    text += `${platform}\n\n`;
-    
-    text += `Type ${prefix}help for all commands.`;
-    
-    return text;
+function getHelpText() {
+    return `🎵 *${BOT_NAME} Commands*\n\n` +
+           `${BOT_PREFIX}play <song> - Play music\n` +
+           `${BOT_PREFIX}dice - Roll dice\n` +
+           `${BOT_PREFIX}coinflip - Flip coin\n` +
+           `${BOT_PREFIX}time - Current time\n` +
+           `${BOT_PREFIX}ping - Check status\n` +
+           `${BOT_PREFIX}info - Bot info`;
 }
 
 // ============ TELEGRAM COMMANDS ============
-
-// Telegram commands with proper handlers
-telegramBot.command('start', (ctx) => {
+telegramBot.start((ctx) => {
     ctx.replyWithMarkdown(
         `🎵 *${BOT_NAME} Bot*\n\n` +
-        `Welcome! I'm ${BOT_NAME}, your multi-platform bot.\n` +
-        `I work on both Telegram and WhatsApp!\n\n` +
-        `Send /menu to see available commands.`
+        `I work on both Telegram and WhatsApp!\n` +
+        `Send /pair to get WhatsApp pairing code.`
     );
+});
+
+telegramBot.command('pair', async (ctx) => {
+    if (ctx.from.id !== OWNER_ID) {
+        return ctx.reply('❌ This command is only for the bot owner.');
+    }
+    
+    await ctx.reply('🔑 Generating WhatsApp pairing code...');
+    
+    try {
+        await generatePairingCode(WHATSAPP_NUMBER || '');
+        await ctx.reply(
+            `🔑 *Pairing Code Generated!*\n\n` +
+            `1. Open WhatsApp on your phone\n` +
+            `2. Go to Settings → Linked Devices → Link a Device\n` +
+            `3. Enter the code I'll send you\n\n` +
+            `⏳ Check your logs or wait for the code...`
+        );
+    } catch (error) {
+        ctx.reply('❌ Error generating pairing code. Check logs.');
+    }
 });
 
 telegramBot.command('menu', (ctx) => {
@@ -314,167 +292,84 @@ telegramBot.command('menu', (ctx) => {
         [Markup.button.callback('🎵 Music', 'menu_music')],
         [Markup.button.callback('🎮 Games', 'menu_games')],
         [Markup.button.callback('🛠️ Utility', 'menu_utility')],
-        [Markup.button.callback('🤖 AI', 'menu_ai')],
-        [Markup.button.callback('❓ Help', 'menu_help')]
+        [Markup.button.callback('📱 WhatsApp', 'menu_whatsapp')]
     ]);
     
-    ctx.replyWithMarkdown(
-        `🎵 *${BOT_NAME} Menu*\n\nSelect a category:`,
-        keyboard
-    );
+    ctx.replyWithMarkdown(`🎵 *${BOT_NAME} Menu*`, keyboard);
 });
 
 // Menu callbacks
 telegramBot.action('menu_music', (ctx) => {
     ctx.answerCbQuery();
-    ctx.replyWithMarkdown(
-        `🎵 *Music Commands*\n\n` +
-        `.play <song> - Play a song\n` +
-        `.p <song> - Short for play\n\n` +
-        `Example: \`.play Despacito\``
-    );
+    ctx.replyWithMarkdown(`🎵 *.play <song>* - Play music\n*.p <song>* - Short for play`);
 });
 
 telegramBot.action('menu_games', (ctx) => {
     ctx.answerCbQuery();
-    ctx.replyWithMarkdown(
-        `🎮 *Game Commands*\n\n` +
-        `.dice - Roll a dice\n` +
-        `.coinflip - Flip a coin\n` +
-        `.joke - Random joke`
-    );
+    ctx.replyWithMarkdown(`🎮 *.dice* - Roll dice\n*.coinflip* - Flip coin`);
 });
 
 telegramBot.action('menu_utility', (ctx) => {
     ctx.answerCbQuery();
-    ctx.replyWithMarkdown(
-        `🛠️ *Utility Commands*\n\n` +
-        `.ping - Check bot status\n` +
-        `.time - Current time\n` +
-        `.info - Bot information`
-    );
+    ctx.replyWithMarkdown(`🛠️ *.ping* - Check status\n*.time* - Current time\n*.info* - Bot info`);
 });
 
-telegramBot.action('menu_ai', (ctx) => {
+telegramBot.action('menu_whatsapp', (ctx) => {
     ctx.answerCbQuery();
     ctx.replyWithMarkdown(
-        `🤖 *AI Commands*\n\n` +
-        `.ai <question> - Ask AI\n\n` +
-        `Example: \`.ai What is quantum computing?\``
+        `📱 *WhatsApp Setup*\n\n` +
+        `1. Type /pair (owner only)\n` +
+        `2. Get pairing code\n` +
+        `3. Open WhatsApp → Settings → Linked Devices\n` +
+        `4. Enter the code\n\n` +
+        `✅ Your WhatsApp will connect!`
     );
-});
-
-telegramBot.action('menu_help', (ctx) => {
-    ctx.answerCbQuery();
-    ctx.replyWithMarkdown(getHelpText('telegram'));
 });
 
 telegramBot.command('help', (ctx) => {
-    ctx.replyWithMarkdown(getHelpText('telegram'));
-});
-
-// Group management commands for Telegram
-telegramBot.command('kick', async (ctx) => {
-    if (!ctx.message.reply_to_message) {
-        return ctx.reply('❌ Reply to the user you want to kick!');
-    }
-    try {
-        const userId = ctx.message.reply_to_message.from.id;
-        await ctx.kickChatMember(userId);
-        ctx.reply('✅ User kicked!');
-    } catch (error) {
-        ctx.reply('❌ Failed to kick. I need admin permissions!');
-    }
-});
-
-telegramBot.command('ban', async (ctx) => {
-    if (!ctx.message.reply_to_message) {
-        return ctx.reply('❌ Reply to the user you want to ban!');
-    }
-    try {
-        const userId = ctx.message.reply_to_message.from.id;
-        await ctx.banChatMember(userId);
-        ctx.reply('✅ User banned!');
-    } catch (error) {
-        ctx.reply('❌ Failed to ban. I need admin permissions!');
-    }
-});
-
-telegramBot.command('promote', async (ctx) => {
-    if (!ctx.message.reply_to_message) {
-        return ctx.reply('❌ Reply to the user you want to promote!');
-    }
-    try {
-        const userId = ctx.message.reply_to_message.from.id;
-        await ctx.promoteChatMember(userId);
-        ctx.reply('✅ User promoted to admin!');
-    } catch (error) {
-        ctx.reply('❌ Failed to promote. I need admin permissions!');
-    }
-});
-
-telegramBot.command('mute', async (ctx) => {
-    if (!ctx.message.reply_to_message) {
-        return ctx.reply('❌ Reply to the user you want to mute!');
-    }
-    try {
-        const userId = ctx.message.reply_to_message.from.id;
-        const untilDate = Math.floor(Date.now() / 1000) + 300;
-        await ctx.restrictChatMember(userId, {
-            until_date: untilDate,
-            can_send_messages: false
-        });
-        ctx.reply('🔇 User muted for 5 minutes!');
-    } catch (error) {
-        ctx.reply('❌ Failed to mute. I need admin permissions!');
-    }
+    ctx.replyWithMarkdown(getHelpText());
 });
 
 // ============ ERROR HANDLING ============
 telegramBot.catch((err, ctx) => {
     console.error('❌ Telegram error:', err);
-    ctx.reply('❌ An error occurred. Please try again.');
+    ctx.reply('❌ An error occurred.');
 });
 
 // ============ START BOT ============
 async function startBot() {
     console.log(`🎵 ${BOT_NAME} Bot starting...`);
     console.log(`📋 Prefix: ${BOT_PREFIX}`);
+    console.log(`📱 WhatsApp Number: ${WHATSAPP_NUMBER || 'Not set'}`);
     
-    // Start Telegram bot
+    // Start Telegram
     try {
         await telegramBot.launch();
-        console.log(`✅ Telegram bot started!`);
-        console.log(`📱 Bot username: @${telegramBot.botInfo?.username || 'unknown'}`);
+        console.log(`✅ Telegram started!`);
+        console.log(`📱 @${telegramBot.botInfo?.username || 'unknown'}`);
     } catch (error) {
-        console.error('❌ Failed to start Telegram bot:', error);
+        console.error('❌ Telegram error:', error);
     }
     
-    // Start WhatsApp bot
+    // Start WhatsApp with pairing code
     try {
-        await connectWhatsApp();
+        if (WHATSAPP_NUMBER) {
+            console.log(`🔑 Generating pairing code for ${WHATSAPP_NUMBER}...`);
+            await generatePairingCode(WHATSAPP_NUMBER);
+        } else {
+            console.log(`📱 Starting WhatsApp (pairing mode)...`);
+            await connectWhatsApp();
+        }
     } catch (error) {
-        console.error('❌ Failed to start WhatsApp bot:', error);
+        console.error('❌ WhatsApp error:', error);
     }
     
-    console.log(`🎵 ${BOT_NAME} is online!`);
+    console.log(`\n🎵 ${BOT_NAME} is online!`);
+    console.log(`📱 Telegram: @${telegramBot.botInfo?.username || 'unknown'}`);
+    console.log(`📱 WhatsApp: Check logs for pairing code\n`);
 }
 
-// Graceful shutdown
-process.once('SIGINT', () => {
-    console.log('🛑 Shutting down...');
-    telegramBot.stop('SIGINT');
-    process.exit(0);
-});
+process.once('SIGINT', () => { telegramBot.stop('SIGINT'); process.exit(0); });
+process.once('SIGTERM', () => { telegramBot.stop('SIGTERM'); process.exit(0); });
 
-process.once('SIGTERM', () => {
-    console.log('🛑 Shutting down...');
-    telegramBot.stop('SIGTERM');
-    process.exit(0);
-});
-
-// Start the bot
 startBot();
-
-// ============ EXPORTS FOR RAILWAY ============
-module.exports = { startBot };
