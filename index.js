@@ -1,475 +1,480 @@
-// index.js - Silent DJ Bot (Complete Telegram Version)
+// index.js - Silent DJ Bot (WhatsApp + Telegram)
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const fs = require('fs-extra');
 const axios = require('axios');
 const moment = require('moment-timezone');
 const ytSearch = require('yt-search');
+const qrcode = require('qrcode-terminal');
 
-// Check for token
-if (!process.env.TELEGRAM_BOT_TOKEN) {
-    console.error('❌ TELEGRAM_BOT_TOKEN is missing!');
-    process.exit(1);
-}
-
-const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
+// ============ CONFIGURATION ============
+const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const OWNER_ID = parseInt(process.env.OWNER_ID || '0');
 const BOT_NAME = process.env.BOT_NAME || 'Silent DJ';
 const BOT_PREFIX = process.env.BOT_PREFIX || '.';
 
-// Store warnings for users (in production, use a database)
-const warnings = new Map();
+// ============ TELEGRAM BOT ============
+const telegramBot = new Telegraf(TELEGRAM_TOKEN);
 
-// ============ SILENT DJ MAIN MENU ============
-bot.command('menu', async (ctx) => {
+// ============ WHATSAPP CONNECTION ============
+let whatsappSock = null;
+let whatsappConnected = false;
+
+async function connectWhatsApp() {
+    console.log('📱 Connecting to WhatsApp...');
+    
+    try {
+        const { state, saveCreds } = await useMultiFileAuthState('./session');
+        
+        const sock = makeWASocket({
+            auth: state,
+            printQRInTerminal: true,
+            browser: ['Silent DJ', 'Chrome', '120.0.0.0'],
+            connectTimeoutMs: 30000,
+            defaultQueryTimeoutMs: 30000,
+        });
+
+        sock.ev.on('creds.update', saveCreds);
+
+        sock.ev.on('connection.update', (update) => {
+            const { connection, lastDisconnect, qr } = update;
+            
+            if (qr) {
+                console.log('📱 Scan this QR code with WhatsApp:');
+                qrcode.generate(qr, { small: true });
+            }
+            
+            if (connection === 'open') {
+                whatsappConnected = true;
+                console.log('✅ WhatsApp connected successfully!');
+                console.log(`📱 Bot is ready on WhatsApp!`);
+            }
+            
+            if (connection === 'close') {
+                const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+                if (shouldReconnect) {
+                    console.log('🔄 Reconnecting to WhatsApp...');
+                    setTimeout(connectWhatsApp, 5000);
+                } else {
+                    console.log('❌ WhatsApp logged out. Please restart.');
+                }
+            }
+        });
+
+        // Handle WhatsApp messages
+        sock.ev.on('messages.upsert', async (m) => {
+            const msg = m.messages[0];
+            if (!msg.key.fromMe && msg.message) {
+                await handleWhatsAppMessage(msg, sock);
+            }
+        });
+
+        whatsappSock = sock;
+        return sock;
+    } catch (error) {
+        console.error('❌ WhatsApp connection error:', error);
+        setTimeout(connectWhatsApp, 10000);
+    }
+}
+
+// ============ MESSAGE HANDLERS ============
+
+// Handle WhatsApp messages
+async function handleWhatsAppMessage(msg, sock) {
+    try {
+        let messageText = '';
+        let sender = msg.key.remoteJid;
+        
+        // Extract text
+        if (msg.message.conversation) {
+            messageText = msg.message.conversation;
+        } else if (msg.message.extendedTextMessage?.text) {
+            messageText = msg.message.extendedTextMessage.text;
+        } else if (msg.message.imageMessage?.caption) {
+            messageText = msg.message.imageMessage.caption;
+        }
+        
+        if (!messageText) return;
+        
+        console.log(`📩 WhatsApp message from ${sender}: ${messageText}`);
+        
+        // Process command
+        const response = await processCommand(messageText, 'whatsapp', sender);
+        
+        if (response) {
+            await sock.sendMessage(sender, { text: response });
+        }
+    } catch (error) {
+        console.error('❌ Error handling WhatsApp message:', error);
+    }
+}
+
+// Handle Telegram messages
+telegramBot.on('text', async (ctx) => {
+    try {
+        const messageText = ctx.message.text;
+        const userId = ctx.from.id;
+        
+        const response = await processCommand(messageText, 'telegram', userId);
+        
+        if (response) {
+            await ctx.reply(response);
+        }
+    } catch (error) {
+        console.error('❌ Error handling Telegram message:', error);
+        ctx.reply('❌ An error occurred. Please try again.');
+    }
+});
+
+// ============ COMMAND PROCESSOR ============
+async function processCommand(text, platform, userId) {
+    // Remove prefix if present
+    let command = text;
+    if (text.startsWith(BOT_PREFIX)) {
+        command = text.substring(1);
+    }
+    
+    const parts = command.split(' ');
+    const cmd = parts[0].toLowerCase();
+    const args = parts.slice(1).join(' ');
+    
+    // ============ MUSIC COMMANDS ============
+    if (cmd === 'play' || cmd === 'p') {
+        if (!args) return '🎵 Please specify a song!\nExample: `.play Despacito`';
+        
+        try {
+            const result = await ytSearch(args);
+            if (!result || !result.videos || result.videos.length === 0) {
+                return '❌ No results found for this song.';
+            }
+            
+            const video = result.videos[0];
+            return `🎵 *Now Playing: ${video.title}*\n` +
+                   `👤 Artist: ${video.author.name}\n` +
+                   `⏱️ Duration: ${video.duration.timestamp}\n` +
+                   `🔗 ${video.url}`;
+        } catch (error) {
+            return '❌ Error searching for song. Please try again.';
+        }
+    }
+    
+    if (cmd === 'help' || cmd === 'h') {
+        return getHelpText(platform);
+    }
+    
+    if (cmd === 'menu') {
+        return getMenuText(platform);
+    }
+    
+    // ============ UTILITY COMMANDS ============
+    if (cmd === 'ping') {
+        return '🏓 Pong! Bot is alive ✅';
+    }
+    
+    if (cmd === 'time') {
+        const now = moment();
+        return `🕐 *Current Time*\n` +
+               `📅 Date: ${now.format('MMMM D, YYYY')}\n` +
+               `🕐 Time: ${now.format('h:mm:ss A')}\n` +
+               `🌍 Timezone: UTC`;
+    }
+    
+    if (cmd === 'info') {
+        return `📊 *${BOT_NAME} Bot*\n\n` +
+               `🤖 Platform: ${platform}\n` +
+               `📦 Version: 2.0.0\n` +
+               `✅ Status: Online\n` +
+               `🎵 Music | 🤖 AI | 🎮 Games | 🛠️ Utility`;
+    }
+    
+    // ============ AI COMMANDS ============
+    if (cmd === 'ai') {
+        if (!args) return '🤖 Please ask a question!\nExample: `.ai What is AI?`';
+        return `🤖 *You asked:* "${args}"\n\n*(AI feature coming soon!)*`;
+    }
+    
+    // ============ GAME COMMANDS ============
+    if (cmd === 'dice') {
+        const result = Math.floor(Math.random() * 6) + 1;
+        const emojis = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
+        return `🎲 You rolled: *${result}* ${emojis[result - 1]}`;
+    }
+    
+    if (cmd === 'coinflip' || cmd === 'coin') {
+        const result = Math.random() < 0.5 ? 'Heads' : 'Tails';
+        return `🪙 *${result}!*`;
+    }
+    
+    if (cmd === 'joke') {
+        try {
+            const response = await axios.get('https://official-joke-api.appspot.com/random_joke');
+            const joke = response.data;
+            return `😂 *${joke.setup}*\n\n${joke.punchline}`;
+        } catch {
+            return '😂 Why don\'t scientists trust atoms? Because they make up everything!';
+        }
+    }
+    
+    // ============ GROUP MANAGEMENT (Telegram only) ============
+    if (platform === 'telegram') {
+        // These only work on Telegram
+        if (cmd === 'kick' || cmd === 'ban' || cmd === 'promote' || cmd === 'mute') {
+            return '👥 *Group Management*\n\n' +
+                   'To use this command on Telegram:\n' +
+                   '1. Reply to a user\'s message\n' +
+                   '2. Type the command\n' +
+                   '3. Example: `/kick` (reply to user)';
+        }
+    }
+    
+    // ============ HELP FOR WHATSAPP ============
+    if (platform === 'whatsapp' && cmd === 'start') {
+        return `🎵 *${BOT_NAME} Bot*\n\n` +
+               `Welcome to ${BOT_NAME}!\n` +
+               `Type .help to see available commands.`;
+    }
+    
+    // Unknown command
+    return `❌ Unknown command: ${cmd}\n\nType ${BOT_PREFIX}help to see available commands.`;
+}
+
+// ============ HELP TEXT ============
+function getHelpText(platform) {
+    const prefix = BOT_PREFIX;
+    
+    let text = `🎵 *${BOT_NAME} Bot - Help*\n\n`;
+    text += `*Music Commands*\n`;
+    text += `${prefix}play <song> - Play a song\n`;
+    text += `${prefix}p <song> - Short for play\n\n`;
+    
+    text += `*Game Commands*\n`;
+    text += `${prefix}dice - Roll a dice\n`;
+    text += `${prefix}coinflip - Flip a coin\n`;
+    text += `${prefix}joke - Random joke\n\n`;
+    
+    text += `*Utility Commands*\n`;
+    text += `${prefix}ping - Check bot status\n`;
+    text += `${prefix}time - Current time\n`;
+    text += `${prefix}info - Bot info\n`;
+    text += `${prefix}menu - Show menu\n\n`;
+    
+    text += `*AI Commands*\n`;
+    text += `${prefix}ai <question> - Ask AI\n`;
+    
+    if (platform === 'telegram') {
+        text += `\n*Group Commands (Telegram only)*\n`;
+        text += `/kick - Kick user (reply)\n`;
+        text += `/ban - Ban user (reply)\n`;
+        text += `/promote - Promote user (reply)\n`;
+        text += `/mute - Mute user (reply)`;
+    }
+    
+    return text;
+}
+
+function getMenuText(platform) {
+    const prefix = BOT_PREFIX;
+    
+    let text = `🎵 *${BOT_NAME} Menu*\n\n`;
+    text += `🎵 *Music*\n`;
+    text += `${prefix}play <song>\n\n`;
+    
+    text += `🎮 *Games*\n`;
+    text += `${prefix}dice · ${prefix}coinflip · ${prefix}joke\n\n`;
+    
+    text += `🛠️ *Utility*\n`;
+    text += `${prefix}ping · ${prefix}time · ${prefix}info\n\n`;
+    
+    text += `🤖 *AI*\n`;
+    text += `${prefix}ai <question>\n\n`;
+    
+    text += `📱 *Platform*\n`;
+    text += `${platform}\n\n`;
+    
+    text += `Type ${prefix}help for all commands.`;
+    
+    return text;
+}
+
+// ============ TELEGRAM COMMANDS ============
+
+// Telegram commands with proper handlers
+telegramBot.command('start', (ctx) => {
+    ctx.replyWithMarkdown(
+        `🎵 *${BOT_NAME} Bot*\n\n` +
+        `Welcome! I'm ${BOT_NAME}, your multi-platform bot.\n` +
+        `I work on both Telegram and WhatsApp!\n\n` +
+        `Send /menu to see available commands.`
+    );
+});
+
+telegramBot.command('menu', (ctx) => {
     const keyboard = Markup.inlineKeyboard([
         [Markup.button.callback('🎵 Music', 'menu_music')],
-        [Markup.button.callback('🤖 AI & Tools', 'menu_ai')],
-        [Markup.button.callback('👥 Group', 'menu_group')],
         [Markup.button.callback('🎮 Games', 'menu_games')],
         [Markup.button.callback('🛠️ Utility', 'menu_utility')],
-        [Markup.button.callback('📱 Media', 'menu_media')],
+        [Markup.button.callback('🤖 AI', 'menu_ai')],
         [Markup.button.callback('❓ Help', 'menu_help')]
     ]);
     
     ctx.replyWithMarkdown(
-        `🎵 *${BOT_NAME} Bot*\n\n` +
-        'Select a category to see available commands:',
+        `🎵 *${BOT_NAME} Menu*\n\nSelect a category:`,
         keyboard
     );
 });
 
-// ============ MENU NAVIGATION ============
-const menus = {
-    music: `🎵 *Music Commands*\n\n` +
-          `/play <song> - Search and play music\n` +
-          `/lyrics <song> - Get song lyrics\n` +
-          `/song <song> - Download song\n` +
-          `/yt <url> - Download YouTube video\n` +
-          `/ytmp3 <url> - Download YouTube audio\n` +
-          `/shazam - Identify playing song (send audio)`,
-
-    ai: `🤖 *AI & Tools Commands*\n\n` +
-        `/ai <question> - Ask AI\n` +
-        `/image <prompt> - Generate AI image\n` +
-        `/analyze <text> - Analyze text\n` +
-        `/translate <text> - Translate to English\n` +
-        `/summarize <text> - Summarize text\n` +
-        `/qr <text> - Generate QR code`,
-
-    group: `👥 *Group Management Commands*\n\n` +
-           `*Admin Commands (reply to a user)*\n` +
-           `/kick - Kick a user\n` +
-           `/ban - Ban a user\n` +
-           `/promote - Promote to admin\n` +
-           `/demote - Demote from admin\n` +
-           `/mute - Mute a user (5 min)\n` +
-           `/unmute - Unmute a user\n` +
-           `/warn - Warn a user\n` +
-           `/warnings - Check warnings\n` +
-           `/resetwarns - Reset warnings\n\n` +
-           `*Group Settings*\n` +
-           `/setwelcome <msg> - Set welcome message\n` +
-           `/antilink on/off - Anti-link protection`,
-
-    games: `🎮 *Game Commands*\n\n` +
-           `/dice - Roll a dice\n` +
-           `/coinflip - Flip a coin\n` +
-           `/trivia - Random trivia question\n` +
-           `/joke - Random joke\n` +
-           `/meme - Random meme\n` +
-           `/quote - Random quote\n` +
-           `/rps <rock/paper/scissors> - Rock Paper Scissors\n` +
-           `/number <min> <max> - Random number`,
-
-    utility: `🛠️ *Utility Commands*\n\n` +
-             `/ping - Check bot latency\n` +
-             `/time - Current time\n` +
-             `/weather <city> - Weather forecast\n` +
-             `/news - Latest news\n` +
-             `/info - Bot information\n` +
-             `/stats - Bot statistics\n` +
-             `/uptime - Bot uptime`,
-
-    media: `📱 *Media Download Commands*\n\n` +
-           `/tiktok <url> - Download TikTok\n` +
-           `/instagram <url> - Download Instagram\n` +
-           `/facebook <url> - Download Facebook\n` +
-           `/twitter <url> - Download Twitter/X\n` +
-           `/reddit <url> - Download Reddit\n` +
-           `/pinterest <url> - Download Pinterest`,
-
-    help: `🎵 *${BOT_NAME} Bot - Help*\n\n` +
-          `*How to use commands:*\n` +
-          `• Type / or ${BOT_PREFIX} followed by the command\n` +
-          `• Example: ${BOT_PREFIX}play Despacito\n\n` +
-          `*Getting Started:*\n` +
-          `1. Send /menu to open the main menu\n` +
-          `2. Select a category\n` +
-          `3. Use commands from that category\n\n` +
-          `*Need help?*\n` +
-          `Contact: @${bot.botInfo?.username || 'your_bot_username'}`
-};
-
 // Menu callbacks
-bot.action('menu_music', (ctx) => { ctx.answerCbQuery(); ctx.replyWithMarkdown(menus.music); });
-bot.action('menu_ai', (ctx) => { ctx.answerCbQuery(); ctx.replyWithMarkdown(menus.ai); });
-bot.action('menu_group', (ctx) => { ctx.answerCbQuery(); ctx.replyWithMarkdown(menus.group); });
-bot.action('menu_games', (ctx) => { ctx.answerCbQuery(); ctx.replyWithMarkdown(menus.games); });
-bot.action('menu_utility', (ctx) => { ctx.answerCbQuery(); ctx.replyWithMarkdown(menus.utility); });
-bot.action('menu_media', (ctx) => { ctx.answerCbQuery(); ctx.replyWithMarkdown(menus.media); });
-bot.action('menu_help', (ctx) => { ctx.answerCbQuery(); ctx.replyWithMarkdown(menus.help); });
-
-// ============ BASIC COMMANDS ============
-bot.start((ctx) => {
+telegramBot.action('menu_music', (ctx) => {
+    ctx.answerCbQuery();
     ctx.replyWithMarkdown(
-        `🎵 *${BOT_NAME} Bot is online!*\n\n` +
-        `Send /menu to see all available commands.\n` +
-        `Bot Prefix: ${BOT_PREFIX}\n` +
-        `Version: 2.0.0`
+        `🎵 *Music Commands*\n\n` +
+        `.play <song> - Play a song\n` +
+        `.p <song> - Short for play\n\n` +
+        `Example: \`.play Despacito\``
     );
 });
 
-bot.command('help', (ctx) => {
-    ctx.replyWithMarkdown(menus.help);
+telegramBot.action('menu_games', (ctx) => {
+    ctx.answerCbQuery();
+    ctx.replyWithMarkdown(
+        `🎮 *Game Commands*\n\n` +
+        `.dice - Roll a dice\n` +
+        `.coinflip - Flip a coin\n` +
+        `.joke - Random joke`
+    );
 });
 
-bot.command('ping', (ctx) => {
-    const start = Date.now();
-    ctx.reply('🏓 Pinging...').then(msg => {
-        const latency = Date.now() - start;
-        ctx.telegram.editMessageText(
-            msg.chat.id,
-            msg.message_id,
-            null,
-            `🏓 *Pong!*\nLatency: ${latency}ms\nBot: ✅ Online`,
-            { parse_mode: 'Markdown' }
-        );
-    });
+telegramBot.action('menu_utility', (ctx) => {
+    ctx.answerCbQuery();
+    ctx.replyWithMarkdown(
+        `🛠️ *Utility Commands*\n\n` +
+        `.ping - Check bot status\n` +
+        `.time - Current time\n` +
+        `.info - Bot information`
+    );
 });
 
-// ============ MUSIC COMMANDS ============
-bot.command('play', async (ctx) => {
-    const query = ctx.message.text.replace('/play', '').trim();
-    if (!query) {
-        return ctx.reply('🎵 Please specify a song!\nExample: `/play Despacito`');
-    }
-    
-    try {
-        await ctx.reply(`🔍 Searching for "${query}"...`);
-        const result = await ytSearch(query);
-        
-        if (!result || !result.videos || result.videos.length === 0) {
-            return ctx.reply('❌ No results found for this song.');
-        }
-        
-        const video = result.videos[0];
-        ctx.replyWithMarkdown(
-            `🎵 *Now Playing: ${video.title}*\n\n` +
-            `👤 *Artist:* ${video.author.name}\n` +
-            `⏱️ *Duration:* ${video.duration.timestamp}\n` +
-            `👀 *Views:* ${video.views}\n` +
-            `🔗 [Watch on YouTube](${video.url})\n\n` +
-            `📥 Send ${BOT_PREFIX}yt ${video.url} to download`
-        );
-    } catch (error) {
-        console.error('Play error:', error);
-        ctx.reply('❌ Error searching for song. Please try again.');
-    }
+telegramBot.action('menu_ai', (ctx) => {
+    ctx.answerCbQuery();
+    ctx.replyWithMarkdown(
+        `🤖 *AI Commands*\n\n` +
+        `.ai <question> - Ask AI\n\n` +
+        `Example: \`.ai What is quantum computing?\``
+    );
 });
 
-// ============ AI COMMANDS ============
-bot.command('ai', async (ctx) => {
-    const query = ctx.message.text.replace('/ai', '').trim();
-    if (!query) {
-        return ctx.reply('🤖 Please ask a question!\nExample: `/ai What is quantum computing?`');
-    }
-    
-    await ctx.reply('🤔 Thinking...');
-    try {
-        // For now, use a free API or just echo
-        ctx.reply(`🤖 *You asked:* "${query}"\n\n*(AI integration coming soon! Add OpenAI API key to enable.)*`);
-    } catch (error) {
-        ctx.reply('❌ AI service error. Please try again.');
-    }
+telegramBot.action('menu_help', (ctx) => {
+    ctx.answerCbQuery();
+    ctx.replyWithMarkdown(getHelpText('telegram'));
 });
 
-// ============ GROUP MANAGEMENT COMMANDS ============
-bot.command('kick', async (ctx) => {
+telegramBot.command('help', (ctx) => {
+    ctx.replyWithMarkdown(getHelpText('telegram'));
+});
+
+// Group management commands for Telegram
+telegramBot.command('kick', async (ctx) => {
     if (!ctx.message.reply_to_message) {
-        return ctx.reply('❌ Reply to the user you want to kick!\nExample: Reply to a message and type `/kick`');
+        return ctx.reply('❌ Reply to the user you want to kick!');
     }
-    
     try {
         const userId = ctx.message.reply_to_message.from.id;
-        const userName = ctx.message.reply_to_message.from.first_name || 'User';
         await ctx.kickChatMember(userId);
-        await ctx.reply(`✅ ${userName} has been kicked!`);
+        ctx.reply('✅ User kicked!');
     } catch (error) {
-        console.error('Kick error:', error);
         ctx.reply('❌ Failed to kick. I need admin permissions!');
     }
 });
 
-bot.command('ban', async (ctx) => {
+telegramBot.command('ban', async (ctx) => {
     if (!ctx.message.reply_to_message) {
         return ctx.reply('❌ Reply to the user you want to ban!');
     }
-    
     try {
         const userId = ctx.message.reply_to_message.from.id;
-        const userName = ctx.message.reply_to_message.from.first_name || 'User';
         await ctx.banChatMember(userId);
-        await ctx.reply(`✅ ${userName} has been banned!`);
+        ctx.reply('✅ User banned!');
     } catch (error) {
-        console.error('Ban error:', error);
         ctx.reply('❌ Failed to ban. I need admin permissions!');
     }
 });
 
-bot.command('promote', async (ctx) => {
+telegramBot.command('promote', async (ctx) => {
     if (!ctx.message.reply_to_message) {
         return ctx.reply('❌ Reply to the user you want to promote!');
     }
-    
     try {
         const userId = ctx.message.reply_to_message.from.id;
-        const userName = ctx.message.reply_to_message.from.first_name || 'User';
         await ctx.promoteChatMember(userId);
-        await ctx.reply(`✅ ${userName} has been promoted to admin!`);
+        ctx.reply('✅ User promoted to admin!');
     } catch (error) {
-        console.error('Promote error:', error);
         ctx.reply('❌ Failed to promote. I need admin permissions!');
     }
 });
 
-bot.command('demote', async (ctx) => {
-    if (!ctx.message.reply_to_message) {
-        return ctx.reply('❌ Reply to the user you want to demote!');
-    }
-    
-    try {
-        const userId = ctx.message.reply_to_message.from.id;
-        const userName = ctx.message.reply_to_message.from.first_name || 'User';
-        await ctx.promoteChatMember(userId, {
-            can_change_info: false,
-            can_delete_messages: false,
-            can_invite_users: false,
-            can_restrict_members: false,
-            can_pin_messages: false,
-            can_promote_members: false
-        });
-        await ctx.reply(`✅ ${userName} has been demoted!`);
-    } catch (error) {
-        console.error('Demote error:', error);
-        ctx.reply('❌ Failed to demote. I need admin permissions!');
-    }
-});
-
-bot.command('mute', async (ctx) => {
+telegramBot.command('mute', async (ctx) => {
     if (!ctx.message.reply_to_message) {
         return ctx.reply('❌ Reply to the user you want to mute!');
     }
-    
     try {
         const userId = ctx.message.reply_to_message.from.id;
-        const userName = ctx.message.reply_to_message.from.first_name || 'User';
-        const untilDate = Math.floor(Date.now() / 1000) + 300; // 5 minutes
+        const untilDate = Math.floor(Date.now() / 1000) + 300;
         await ctx.restrictChatMember(userId, {
             until_date: untilDate,
-            can_send_messages: false,
-            can_send_media_messages: false
+            can_send_messages: false
         });
-        await ctx.reply(`🔇 ${userName} has been muted for 5 minutes!`);
+        ctx.reply('🔇 User muted for 5 minutes!');
     } catch (error) {
-        console.error('Mute error:', error);
         ctx.reply('❌ Failed to mute. I need admin permissions!');
     }
 });
 
-bot.command('unmute', async (ctx) => {
-    if (!ctx.message.reply_to_message) {
-        return ctx.reply('❌ Reply to the user you want to unmute!');
-    }
-    
-    try {
-        const userId = ctx.message.reply_to_message.from.id;
-        const userName = ctx.message.reply_to_message.from.first_name || 'User';
-        await ctx.restrictChatMember(userId, {
-            can_send_messages: true,
-            can_send_media_messages: true,
-            can_send_other_messages: true
-        });
-        await ctx.reply(`🔊 ${userName} has been unmuted!`);
-    } catch (error) {
-        console.error('Unmute error:', error);
-        ctx.reply('❌ Failed to unmute. I need admin permissions!');
-    }
-});
-
-bot.command('warn', async (ctx) => {
-    if (!ctx.message.reply_to_message) {
-        return ctx.reply('❌ Reply to the user you want to warn!');
-    }
-    
-    const userId = ctx.message.reply_to_message.from.id;
-    const userName = ctx.message.reply_to_message.from.first_name || 'User';
-    
-    if (!warnings.has(userId)) {
-        warnings.set(userId, 0);
-    }
-    const count = warnings.get(userId) + 1;
-    warnings.set(userId, count);
-    
-    await ctx.reply(`⚠️ ${userName} has been warned! (${count}/3)`);
-    
-    if (count >= 3) {
-        try {
-            await ctx.kickChatMember(userId);
-            warnings.delete(userId);
-            await ctx.reply(`⚠️ ${userName} has been kicked for reaching 3 warnings!`);
-        } catch (error) {
-            console.error('Auto-kick error:', error);
-        }
-    }
-});
-
-bot.command('warnings', async (ctx) => {
-    if (!ctx.message.reply_to_message) {
-        return ctx.reply('❌ Reply to the user to check warnings!');
-    }
-    
-    const userId = ctx.message.reply_to_message.from.id;
-    const userName = ctx.message.reply_to_message.from.first_name || 'User';
-    const count = warnings.get(userId) || 0;
-    
-    await ctx.reply(`⚠️ ${userName} has ${count} warning(s)`);
-});
-
-bot.command('resetwarns', async (ctx) => {
-    if (!ctx.message.reply_to_message) {
-        return ctx.reply('❌ Reply to the user to reset warnings!');
-    }
-    
-    const userId = ctx.message.reply_to_message.from.id;
-    const userName = ctx.message.reply_to_message.from.first_name || 'User';
-    warnings.delete(userId);
-    
-    await ctx.reply(`✅ ${userName}'s warnings have been reset!`);
-});
-
-// ============ GAME COMMANDS ============
-bot.command('dice', (ctx) => {
-    const result = Math.floor(Math.random() * 6) + 1;
-    const emojis = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
-    ctx.reply(`🎲 You rolled: *${result}* ${emojis[result - 1]}`, { parse_mode: 'Markdown' });
-});
-
-bot.command('coinflip', (ctx) => {
-    const result = Math.random() < 0.5 ? 'Heads' : 'Tails';
-    const emoji = result === 'Heads' ? '🪙' : '🪙';
-    ctx.reply(`${emoji} *${result}!*`, { parse_mode: 'Markdown' });
-});
-
-bot.command('joke', async (ctx) => {
-    try {
-        const response = await axios.get('https://official-joke-api.appspot.com/random_joke');
-        const joke = response.data;
-        ctx.reply(`😂 *${joke.setup}*\n\n${joke.punchline}`, { parse_mode: 'Markdown' });
-    } catch (error) {
-        ctx.reply('😂 Why don\'t scientists trust atoms? Because they make up everything!');
-    }
-});
-
-bot.command('rps', (ctx) => {
-    const choices = ['rock', 'paper', 'scissors'];
-    const userChoice = ctx.message.text.replace('/rps', '').trim().toLowerCase();
-    if (!choices.includes(userChoice)) {
-        return ctx.reply('🎮 Choose rock, paper, or scissors!\nExample: `/rps rock`');
-    }
-    
-    const botChoice = choices[Math.floor(Math.random() * 3)];
-    let result = '';
-    
-    if (userChoice === botChoice) {
-        result = "It's a tie! 🤝";
-    } else if (
-        (userChoice === 'rock' && botChoice === 'scissors') ||
-        (userChoice === 'paper' && botChoice === 'rock') ||
-        (userChoice === 'scissors' && botChoice === 'paper')
-    ) {
-        result = 'You win! 🎉';
-    } else {
-        result = 'I win! 😈';
-    }
-    
-    ctx.reply(`🎮 *Rock Paper Scissors*\n\nYou: ${userChoice} 🆚 Me: ${botChoice}\n\n${result}`, { parse_mode: 'Markdown' });
-});
-
-// ============ UTILITY COMMANDS ============
-bot.command('time', (ctx) => {
-    const now = moment();
-    ctx.replyWithMarkdown(
-        `🕐 *Current Time*\n\n` +
-        `📅 Date: ${now.format('MMMM D, YYYY')}\n` +
-        `🕐 Time: ${now.format('h:mm:ss A')}\n` +
-        `🌍 Timezone: ${now.tz('UTC').format('z')}\n` +
-        `📆 Day: ${now.format('dddd')}`
-    );
-});
-
-bot.command('info', (ctx) => {
-    const user = ctx.from;
-    ctx.replyWithMarkdown(
-        `📊 *Bot Information*\n\n` +
-        `🤖 Bot: @${bot.botInfo?.username || 'unknown'}\n` +
-        `🆔 Bot ID: ${bot.botInfo?.id || 'unknown'}\n` +
-        `📦 Version: 2.0.0\n` +
-        `👑 Owner: ${OWNER_ID}\n` +
-        `✅ Status: Online\n` +
-        `📊 Commands: 30+\n` +
-        `🔷 Categories: 7`
-    );
-});
-
-bot.command('stats', async (ctx) => {
-    if (ctx.from.id !== OWNER_ID) {
-        return ctx.reply('❌ This command is only for the bot owner.');
-    }
-    
-    try {
-        const me = await bot.telegram.getMe();
-        ctx.replyWithMarkdown(
-            `📊 *Bot Statistics*\n\n` +
-            `🤖 Bot: @${me.username}\n` +
-            `🆔 Bot ID: ${me.id}\n` +
-            `✅ Status: Online\n` +
-            `👑 Owner ID: ${OWNER_ID}\n` +
-            `📦 Version: 2.0.0\n\n` +
-            `*Categories:*\n` +
-            `🎵 Music | 🤖 AI | 👥 Group\n` +
-            `🎮 Games | 🛠️ Utility | 📱 Media`
-        );
-    } catch (error) {
-        ctx.reply('❌ Error fetching stats');
-    }
-});
-
 // ============ ERROR HANDLING ============
-bot.catch((err, ctx) => {
-    console.error('Bot error:', err);
+telegramBot.catch((err, ctx) => {
+    console.error('❌ Telegram error:', err);
     ctx.reply('❌ An error occurred. Please try again.');
 });
 
 // ============ START BOT ============
-bot.launch().then(() => {
-    console.log(`🎵 ${BOT_NAME} Bot is running!`);
-    console.log(`📱 Bot username: @${bot.botInfo?.username || 'unknown'}`);
-    console.log(`🔷 Commands loaded: 30+`);
-    console.log(`👑 Owner ID: ${OWNER_ID}`);
-}).catch(err => {
-    console.error('❌ Failed to start bot:', err);
-    process.exit(1);
+async function startBot() {
+    console.log(`🎵 ${BOT_NAME} Bot starting...`);
+    console.log(`📋 Prefix: ${BOT_PREFIX}`);
+    
+    // Start Telegram bot
+    try {
+        await telegramBot.launch();
+        console.log(`✅ Telegram bot started!`);
+        console.log(`📱 Bot username: @${telegramBot.botInfo?.username || 'unknown'}`);
+    } catch (error) {
+        console.error('❌ Failed to start Telegram bot:', error);
+    }
+    
+    // Start WhatsApp bot
+    try {
+        await connectWhatsApp();
+    } catch (error) {
+        console.error('❌ Failed to start WhatsApp bot:', error);
+    }
+    
+    console.log(`🎵 ${BOT_NAME} is online!`);
+}
+
+// Graceful shutdown
+process.once('SIGINT', () => {
+    console.log('🛑 Shutting down...');
+    telegramBot.stop('SIGINT');
+    process.exit(0);
 });
 
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+process.once('SIGTERM', () => {
+    console.log('🛑 Shutting down...');
+    telegramBot.stop('SIGTERM');
+    process.exit(0);
+});
+
+// Start the bot
+startBot();
+
+// ============ EXPORTS FOR RAILWAY ============
+module.exports = { startBot };
