@@ -1,30 +1,37 @@
 FROM node:22-slim
 
-# Install git and all dependencies
+# Install git and other dependencies
 RUN apt-get update -qq && \
     apt-get install --no-install-recommends -y \
+    ffmpeg \
+    libwebp7 \
     git \
     openssh-client \
     ca-certificates \
-    ffmpeg \
-    libwebp7 && \
+    curl \
+    build-essential && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Configure git to use HTTPS for GitHub
+# Force git to use HTTPS instead of SSH for GitHub
 RUN git config --global url."https://github.com/".insteadOf git@github.com: && \
-    git config --global url."https://".insteadOf ssh://git@github.com/
+    git config --global url."https://".insteadOf ssh://git@github.com/ && \
+    git config --global url."https://github.com/".insteadOf ssh://git@github.com && \
+    git config --global http.sslVerify true
 
+# Set working directory
 WORKDIR /app
 
-# Copy npmrc and package files
-COPY .npmrc ./
+# Copy npmrc first (important!)
+COPY .npmrc .npmrc
+
+# Copy package files
 COPY package*.json ./
 
-# Install with verbose logging
-RUN npm install
+# Install dependencies with verbose output for debugging
+RUN npm install --loglevel=verbose
 
-# Copy source code
+# Copy the rest of the application
 COPY . .
 
 # Start the bot
