@@ -1,4 +1,4 @@
-// index.js - Silent DJ Bot with Dot Commands
+// index.js - Silent DJ Bot (Full Version)
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const axios = require('axios');
@@ -14,12 +14,19 @@ const OWNER_ID = parseInt(process.env.OWNER_ID || '0');
 const BOT_NAME = process.env.BOT_NAME || 'Silent DJ';
 const BOT_PREFIX = process.env.BOT_PREFIX || '.';
 
+if (!TELEGRAM_TOKEN) {
+    console.error('❌ TELEGRAM_BOT_TOKEN is missing!');
+    process.exit(1);
+}
+
 // ============ TELEGRAM BOT ============
 const bot = new Telegraf(TELEGRAM_TOKEN);
 
+console.log(`🎵 ${BOT_NAME} Bot starting...`);
+
 // ============ COMMAND HANDLERS ============
 
-// Play command handler
+// --- Music ---
 async function handlePlayCommand(ctx, query) {
     if (!query) {
         return ctx.reply('🎵 Please specify a song!\nExample: `.play Despacito`');
@@ -50,204 +57,6 @@ async function handlePlayCommand(ctx, query) {
     }
 }
 
-// Ping command handler
-async function handlePingCommand(ctx) {
-    const start = Date.now();
-    ctx.reply('🏓 Pinging...').then(msg => {
-        const latency = Date.now() - start;
-        ctx.telegram.editMessageText(
-            msg.chat.id,
-            msg.message_id,
-            null,
-            `🏓 *Pong!*\nLatency: ${latency}ms\nBot: ✅ Online`,
-            { parse_mode: 'Markdown' }
-        );
-    });
-}
-
-// Help command handler
-async function handleHelpCommand(ctx) {
-    ctx.replyWithMarkdown(
-        `🎵 *${BOT_NAME} Help*\n\n` +
-        `*🎵 Music*\n` +
-        `${BOT_PREFIX}play <song>\n` +
-        `${BOT_PREFIX}lyrics <song>\n\n` +
-        `*🎬 Video*\n` +
-        `${BOT_PREFIX}video <song>\n` +
-        `${BOT_PREFIX}yt <url>\n\n` +
-        `*🖼️ Pictures*\n` +
-        `${BOT_PREFIX}image <prompt>\n` +
-        `${BOT_PREFIX}art <prompt>\n` +
-        `${BOT_PREFIX}anime <prompt>\n` +
-        `${BOT_PREFIX}logo <text>\n\n` +
-        `*🤖 AI*\n` +
-        `${BOT_PREFIX}ai <question>\n` +
-        `${BOT_PREFIX}translate <text>\n` +
-        `${BOT_PREFIX}summarize <text>\n\n` +
-        `*🎮 Games*\n` +
-        `${BOT_PREFIX}dice\n` +
-        `${BOT_PREFIX}coinflip\n` +
-        `${BOT_PREFIX}joke\n\n` +
-        `*🛠️ Utility*\n` +
-        `${BOT_PREFIX}ping\n` +
-        `${BOT_PREFIX}time\n` +
-        `${BOT_PREFIX}info\n\n` +
-        `Send /menu to open the menu.`
-    );
-}
-
-// Time command handler
-async function handleTimeCommand(ctx) {
-    const now = moment();
-    ctx.replyWithMarkdown(
-        `🕐 *Current Time*\n\n` +
-        `📅 Date: ${now.format('MMMM D, YYYY')}\n` +
-        `🕐 Time: ${now.format('h:mm:ss A')}\n` +
-        `📆 Day: ${now.format('dddd')}\n` +
-        `🌍 Timezone: UTC`
-    );
-}
-
-// Info command handler
-async function handleInfoCommand(ctx) {
-    const user = ctx.from;
-    ctx.replyWithMarkdown(
-        `📊 *${BOT_NAME} Bot Information*\n\n` +
-        `🤖 Bot: @${bot.botInfo?.username || 'unknown'}\n` +
-        `📦 Version: 2.0.0\n` +
-        `👤 Your ID: ${user.id}\n` +
-        `👤 Username: @${user.username || 'Not set'}\n` +
-        `📊 Commands: 30+\n` +
-        `🎵 Music • 🎬 Video • 🖼️ Pictures • 🤖 AI`
-    );
-}
-
-// Dice command handler
-async function handleDiceCommand(ctx) {
-    const result = Math.floor(Math.random() * 6) + 1;
-    const emojis = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
-    ctx.reply(`🎲 You rolled: *${result}* ${emojis[result - 1]}`, { parse_mode: 'Markdown' });
-}
-
-// Coin flip command handler
-async function handleCoinFlipCommand(ctx) {
-    const result = Math.random() < 0.5 ? 'Heads' : 'Tails';
-    ctx.reply(`🪙 *${result}!*`, { parse_mode: 'Markdown' });
-}
-
-// Joke command handler
-async function handleJokeCommand(ctx) {
-    try {
-        const response = await axios.get('https://official-joke-api.appspot.com/random_joke');
-        const joke = response.data;
-        ctx.reply(`😂 *${joke.setup}*\n\n${joke.punchline}`, { parse_mode: 'Markdown' });
-    } catch (error) {
-        ctx.reply('😂 Why don\'t scientists trust atoms? Because they make up everything!');
-    }
-}
-// ============ ADDITIONAL HANDLERS FOR DOT COMMANDS ============
-
-// Translate command
-async function handleTranslateCommand(ctx, text) {
-    if (!text) {
-        return ctx.reply('🌍 Please provide text to translate!\nExample: `.translate Hello world`');
-    }
-
-    await ctx.reply('🌍 Translating...');
-
-    try {
-        const response = await axios.get(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|sw`);
-        const translated = response.data.responseData.translatedText;
-        
-        ctx.replyWithMarkdown(
-            `🌍 *Translation*\n\n` +
-            `*Original:* ${text}\n` +
-            `*Translated:* ${translated}`
-        );
-    } catch (error) {
-        console.error('Translate error:', error);
-        ctx.reply(`🌍 *Translation*\n\nOriginal: ${text}\nTranslated: (Translation service unavailable)`);
-    }
-}
-
-// Video command (search and download)
-async function handleVideoCommand(ctx, query) {
-    if (!query) {
-        return ctx.reply('🎬 Please specify a video!\nExample: `.video Despacito`');
-    }
-
-    await ctx.reply('🔍 Searching for "' + query + '"...');
-
-    try {
-        const result = await ytSearch(query);
-        if (!result || !result.videos || result.videos.length === 0) {
-            return ctx.reply('❌ No results found.');
-        }
-
-        const video = result.videos[0];
-        
-        const info = await ytdl.getInfo(video.url);
-        const format = ytdl.chooseFormat(info.formats, { quality: 'lowestvideo' });
-
-        await ctx.replyWithMarkdown(
-            `🎬 *${video.title}*\n\n` +
-            `👤 ${video.author.name}\n` +
-            `⏱️ ${video.duration.timestamp}\n\n` +
-            `📥 [Download Video](${format.url})`
-        );
-    } catch (error) {
-        console.error('Video error:', error);
-        ctx.reply('❌ Error searching for video. Please try again.');
-    }
-}
-
-// AI command
-async function handleAiCommand(ctx, query) {
-    if (!query) {
-        return ctx.reply('🤖 Please ask a question!\nExample: `.ai What is quantum computing?`');
-    }
-
-    await ctx.reply('🤖 Thinking...');
-
-    try {
-        ctx.replyWithMarkdown(
-            `🤖 *AI Response*\n\n` +
-            `*Question:* ${query}\n\n` +
-            `I'm a bot! For real AI responses, add an OpenAI API key.\n\n` +
-            `💡 Try asking about music, time, or weather.`
-        );
-    } catch (error) {
-        console.error('AI error:', error);
-        ctx.reply('❌ Error processing request. Please try again.');
-    }
-}
-
-// Image command
-async function handleImageCommand(ctx, prompt) {
-    if (!prompt) {
-        return ctx.reply('🖼️ Please describe what image you want!\nExample: `.image sunset over mountains`');
-    }
-
-    await ctx.reply('🎨 Generating image...');
-
-    try {
-        const response = await axios.get(`https://picsum.photos/800/600`, { responseType: 'arraybuffer' });
-        const imagePath = path.join(__dirname, 'temp_image.jpg');
-        fs.writeFileSync(imagePath, response.data);
-        
-        await ctx.replyWithPhoto(
-            { source: imagePath },
-            { caption: `🖼️ *Generated Image*\n\nPrompt: "${prompt}"` }
-        );
-        
-        fs.unlinkSync(imagePath);
-    } catch (error) {
-        console.error('Image error:', error);
-        ctx.reply(`🖼️ *Generated Image*\n\nPrompt: "${prompt}"\n\n[View Image](https://picsum.photos/800/600?random=${Date.now()})`);
-    }
-}
-
-// Lyrics command
 async function handleLyricsCommand(ctx, query) {
     if (!query) {
         return ctx.reply('📝 Please specify a song!\nExample: `.lyrics Despacito`');
@@ -280,28 +89,212 @@ async function handleLyricsCommand(ctx, query) {
         console.error('Lyrics error:', error);
         ctx.reply('❌ Error finding lyrics. Please try again.');
     }
-}// ============ DOT COMMAND HANDLER ============
-bot.use(async (ctx, next) => {
-    // ... existing code ...
-    
-    switch (command) {
-        case 'play':
-            await handlePlayCommand(ctx, args);
-            return;
-        case 'ping':
-            await handlePingCommand(ctx);
-            return;
-        // ... more cases ...
-        default:
-            await ctx.reply(`❌ Unknown command: .${command}\n\nType .help for available commands.`);
-            return;
+}
+
+// --- Video ---
+async function handleVideoCommand(ctx, query) {
+    if (!query) {
+        return ctx.reply('🎬 Please specify a video!\nExample: `.video Despacito`');
     }
-});
+
+    await ctx.reply('🔍 Searching for "' + query + '"...');
+
+    try {
+        const result = await ytSearch(query);
+        if (!result || !result.videos || result.videos.length === 0) {
+            return ctx.reply('❌ No results found.');
+        }
+
+        const video = result.videos[0];
+        const info = await ytdl.getInfo(video.url);
+        const format = ytdl.chooseFormat(info.formats, { quality: 'lowestvideo' });
+
+        await ctx.replyWithMarkdown(
+            `🎬 *${video.title}*\n\n` +
+            `👤 ${video.author.name}\n` +
+            `⏱️ ${video.duration.timestamp}\n\n` +
+            `📥 [Download Video](${format.url})`
+        );
+    } catch (error) {
+        console.error('Video error:', error);
+        ctx.reply('❌ Error searching for video. Please try again.');
+    }
+}
+
+// --- Pictures ---
+async function handleImageCommand(ctx, prompt) {
+    if (!prompt) {
+        return ctx.reply('🖼️ Please describe what image you want!\nExample: `.image sunset over mountains`');
+    }
+
+    await ctx.reply('🎨 Generating image...');
+
+    try {
+        const response = await axios.get(`https://picsum.photos/800/600`, { responseType: 'arraybuffer' });
+        const imagePath = path.join(__dirname, 'temp_image.jpg');
+        fs.writeFileSync(imagePath, response.data);
+        
+        await ctx.replyWithPhoto(
+            { source: imagePath },
+            { caption: `🖼️ *Generated Image*\n\nPrompt: "${prompt}"` }
+        );
+        
+        fs.unlinkSync(imagePath);
+    } catch (error) {
+        console.error('Image error:', error);
+        ctx.reply(`🖼️ *Generated Image*\n\nPrompt: "${prompt}"\n\n[View Image](https://picsum.photos/800/600?random=${Date.now()})`);
+    }
+}
+
+// --- AI ---
+async function handleAiCommand(ctx, query) {
+    if (!query) {
+        return ctx.reply('🤖 Please ask a question!\nExample: `.ai What is quantum computing?`');
+    }
+
+    await ctx.reply('🤖 Thinking...');
+
+    try {
+        ctx.replyWithMarkdown(
+            `🤖 *AI Response*\n\n` +
+            `*Question:* ${query}\n\n` +
+            `I'm a bot! For real AI responses, add an OpenAI API key.\n\n` +
+            `💡 Try asking about music, time, or weather.`
+        );
+    } catch (error) {
+        console.error('AI error:', error);
+        ctx.reply('❌ Error processing request. Please try again.');
+    }
+}
+
+async function handleTranslateCommand(ctx, text) {
+    if (!text) {
+        return ctx.reply('🌍 Please provide text to translate!\nExample: `.translate Hello world`');
+    }
+
+    await ctx.reply('🌍 Translating...');
+
+    try {
+        const response = await axios.get(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|sw`);
+        const translated = response.data.responseData.translatedText;
+        
+        ctx.replyWithMarkdown(
+            `🌍 *Translation*\n\n` +
+            `*Original:* ${text}\n` +
+            `*Translated:* ${translated}`
+        );
+    } catch (error) {
+        console.error('Translate error:', error);
+        ctx.reply(`🌍 *Translation*\n\nOriginal: ${text}\nTranslated: (Translation service unavailable)`);
+    }
+}
+
+async function handleSummarizeCommand(ctx, text) {
+    if (!text) {
+        return ctx.reply('📝 Please provide text to summarize!\nExample: `.summarize Your long text here...`');
+    }
+
+    const words = text.split(' ');
+    const summary = words.slice(0, 20).join(' ') + (words.length > 20 ? '...' : '');
+    ctx.reply(`📝 *Summary*\n\n*Original length:* ${words.length} words\n*Summary:* ${summary}`);
+}
+
+// --- Utility ---
+async function handlePingCommand(ctx) {
+    const start = Date.now();
+    ctx.reply('🏓 Pinging...').then(msg => {
+        const latency = Date.now() - start;
+        ctx.telegram.editMessageText(
+            msg.chat.id,
+            msg.message_id,
+            null,
+            `🏓 *Pong!*\nLatency: ${latency}ms\nBot: ✅ Online`,
+            { parse_mode: 'Markdown' }
+        );
+    });
+}
+
+async function handleHelpCommand(ctx) {
+    ctx.replyWithMarkdown(
+        `🎵 *${BOT_NAME} Help*\n\n` +
+        `*🎵 Music*\n` +
+        `${BOT_PREFIX}play <song>\n` +
+        `${BOT_PREFIX}lyrics <song>\n\n` +
+        `*🎬 Video*\n` +
+        `${BOT_PREFIX}video <song>\n` +
+        `${BOT_PREFIX}yt <url>\n\n` +
+        `*🖼️ Pictures*\n` +
+        `${BOT_PREFIX}image <prompt>\n` +
+        `${BOT_PREFIX}art <prompt>\n` +
+        `${BOT_PREFIX}anime <prompt>\n` +
+        `${BOT_PREFIX}logo <text>\n\n` +
+        `*🤖 AI*\n` +
+        `${BOT_PREFIX}ai <question>\n` +
+        `${BOT_PREFIX}translate <text>\n` +
+        `${BOT_PREFIX}summarize <text>\n\n` +
+        `*🎮 Games*\n` +
+        `${BOT_PREFIX}dice\n` +
+        `${BOT_PREFIX}coinflip\n` +
+        `${BOT_PREFIX}joke\n\n` +
+        `*🛠️ Utility*\n` +
+        `${BOT_PREFIX}ping\n` +
+        `${BOT_PREFIX}time\n` +
+        `${BOT_PREFIX}info`
+    );
+}
+
+async function handleTimeCommand(ctx) {
+    const now = moment();
+    ctx.replyWithMarkdown(
+        `🕐 *Current Time*\n\n` +
+        `📅 Date: ${now.format('MMMM D, YYYY')}\n` +
+        `🕐 Time: ${now.format('h:mm:ss A')}\n` +
+        `📆 Day: ${now.format('dddd')}\n` +
+        `🌍 Timezone: UTC`
+    );
+}
+
+async function handleInfoCommand(ctx) {
+    const user = ctx.from;
+    ctx.replyWithMarkdown(
+        `📊 *${BOT_NAME} Bot Information*\n\n` +
+        `🤖 Bot: @${bot.botInfo?.username || 'unknown'}\n` +
+        `📦 Version: 2.0.0\n` +
+        `👤 Your ID: ${user.id}\n` +
+        `👤 Username: @${user.username || 'Not set'}\n` +
+        `📊 Commands: 30+\n` +
+        `🎵 Music • 🎬 Video • 🖼️ Pictures • 🤖 AI`
+    );
+}
+
+// --- Games ---
+async function handleDiceCommand(ctx) {
+    const result = Math.floor(Math.random() * 6) + 1;
+    const emojis = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
+    ctx.reply(`🎲 You rolled: *${result}* ${emojis[result - 1]}`, { parse_mode: 'Markdown' });
+}
+
+async function handleCoinFlipCommand(ctx) {
+    const result = Math.random() < 0.5 ? 'Heads' : 'Tails';
+    ctx.reply(`🪙 *${result}!*`, { parse_mode: 'Markdown' });
+}
+
+async function handleJokeCommand(ctx) {
+    try {
+        const response = await axios.get('https://official-joke-api.appspot.com/random_joke');
+        const joke = response.data;
+        ctx.reply(`😂 *${joke.setup}*\n\n${joke.punchline}`, { parse_mode: 'Markdown' });
+    } catch (error) {
+        ctx.reply('😂 Why don\'t scientists trust atoms? Because they make up everything!');
+    }
+}
+
 // ============ DOT COMMAND HANDLER ============
 bot.use(async (ctx, next) => {
     if (!ctx.message || !ctx.message.text) return next();
     
     const text = ctx.message.text;
+    console.log(`📩 Received: ${text}`);
     
     if (text.startsWith('.')) {
         const commandText = text.substring(1);
@@ -311,40 +304,92 @@ bot.use(async (ctx, next) => {
         
         console.log(`📩 Dot command: ${command} with args: ${args}`);
         
-        switch (command) {
-            case 'play':
-                await handlePlayCommand(ctx, args);
-                return;
-            case 'ping':
-                await handlePingCommand(ctx);
-                return;
-            case 'help':
-                await handleHelpCommand(ctx);
-                return;
-            case 'time':
-                await handleTimeCommand(ctx);
-                return;
-            case 'info':
-                await handleInfoCommand(ctx);
-                return;
-            case 'dice':
-                await handleDiceCommand(ctx);
-                return;
-            case 'coinflip':
-                await handleCoinFlipCommand(ctx);
-                return;
-            case 'joke':
-                await handleJokeCommand(ctx);
-                return;
-            case 'menu':
-                await bot.telegram.sendMessage(ctx.chat.id, 
-                    `🎵 *${BOT_NAME} Menu*\n\nSend /menu to open the full menu.`, 
-                    { parse_mode: 'Markdown' }
-                );
-                return;
-            default:
-                await ctx.reply(`❌ Unknown command: .${command}\n\nType .help for available commands.`);
-                return;
+        try {
+            switch (command) {
+                // Music
+                case 'play':
+                    await handlePlayCommand(ctx, args);
+                    return;
+                case 'lyrics':
+                    await handleLyricsCommand(ctx, args);
+                    return;
+                
+                // Video
+                case 'video':
+                    await handleVideoCommand(ctx, args);
+                    return;
+                case 'yt':
+                    if (!args) return ctx.reply('🎬 Please provide a YouTube URL!\nExample: `.yt https://youtube.com/watch?v=...`');
+                    await handleVideoCommand(ctx, args);
+                    return;
+                
+                // Pictures
+                case 'image':
+                    await handleImageCommand(ctx, args);
+                    return;
+                case 'art':
+                    await handleImageCommand(ctx, args);
+                    return;
+                case 'anime':
+                    await handleImageCommand(ctx, args);
+                    return;
+                case 'logo':
+                    await handleImageCommand(ctx, args);
+                    return;
+                
+                // AI
+                case 'ai':
+                    await handleAiCommand(ctx, args);
+                    return;
+                case 'translate':
+                    await handleTranslateCommand(ctx, args);
+                    return;
+                case 'summarize':
+                    await handleSummarizeCommand(ctx, args);
+                    return;
+                
+                // Utility
+                case 'ping':
+                    await handlePingCommand(ctx);
+                    return;
+                case 'help':
+                    await handleHelpCommand(ctx);
+                    return;
+                case 'time':
+                    await handleTimeCommand(ctx);
+                    return;
+                case 'info':
+                    await handleInfoCommand(ctx);
+                    return;
+                
+                // Games
+                case 'dice':
+                    await handleDiceCommand(ctx);
+                    return;
+                case 'coinflip':
+                    await handleCoinFlipCommand(ctx);
+                    return;
+                case 'joke':
+                    await handleJokeCommand(ctx);
+                    return;
+                
+                case 'menu':
+                    await ctx.reply(`🎵 *${BOT_NAME} Menu*\n\nSend /menu to open the full menu.`, { parse_mode: 'Markdown' });
+                    return;
+                
+                case 'test':
+                    await ctx.reply('✅ Dot commands are working!');
+                    return;
+                
+                default:
+                    await ctx.reply(`❌ Unknown command: .${command}\n\nType .help for available commands.`);
+                    return;
+            }
+        } catch (error) {
+            console.error(`❌ Error in .${command}:`, error.message);
+            console.error(error.stack);
+            await ctx.reply(`❌ Error in .${command}: ${error.message}`);
+            return;
         }
     }
     
@@ -366,7 +411,6 @@ bot.start((ctx) => {
     );
 });
 
-// Menu command
 bot.command('menu', (ctx) => {
     const keyboard = Markup.inlineKeyboard([
         [Markup.button.callback('🎵 Music', 'menu_music')],
@@ -384,7 +428,6 @@ bot.command('menu', (ctx) => {
     );
 });
 
-// Menu callbacks
 bot.action('menu_music', (ctx) => {
     ctx.answerCbQuery();
     ctx.replyWithMarkdown(
@@ -457,10 +500,17 @@ bot.command('info', handleInfoCommand);
 bot.command('dice', handleDiceCommand);
 bot.command('coinflip', handleCoinFlipCommand);
 bot.command('joke', handleJokeCommand);
+bot.command('lyrics', handleLyricsCommand);
+bot.command('video', handleVideoCommand);
+bot.command('ai', handleAiCommand);
+bot.command('translate', handleTranslateCommand);
+bot.command('summarize', handleSummarizeCommand);
+bot.command('image', handleImageCommand);
 
 // ============ ERROR HANDLING ============
 bot.catch((err, ctx) => {
     console.error('❌ Bot error:', err);
+    console.error(err.stack);
     ctx.reply('❌ An error occurred. Please try again.');
 });
 
@@ -475,7 +525,16 @@ bot.launch().then(() => {
     process.exit(1);
 });
 
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+process.once('SIGINT', () => {
+    console.log('🛑 Shutting down...');
+    bot.stop('SIGINT');
+    process.exit(0);
+});
+
+process.once('SIGTERM', () => {
+    console.log('🛑 Shutting down...');
+    bot.stop('SIGTERM');
+    process.exit(0);
+});
 
 module.exports = bot;
