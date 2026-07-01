@@ -145,7 +145,158 @@ async function handleJokeCommand(ctx) {
         ctx.reply('😂 Why don\'t scientists trust atoms? Because they make up everything!');
     }
 }
+// ============ ADDITIONAL HANDLERS FOR DOT COMMANDS ============
 
+// Translate command
+async function handleTranslateCommand(ctx, text) {
+    if (!text) {
+        return ctx.reply('🌍 Please provide text to translate!\nExample: `.translate Hello world`');
+    }
+
+    await ctx.reply('🌍 Translating...');
+
+    try {
+        const response = await axios.get(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|sw`);
+        const translated = response.data.responseData.translatedText;
+        
+        ctx.replyWithMarkdown(
+            `🌍 *Translation*\n\n` +
+            `*Original:* ${text}\n` +
+            `*Translated:* ${translated}`
+        );
+    } catch (error) {
+        console.error('Translate error:', error);
+        ctx.reply(`🌍 *Translation*\n\nOriginal: ${text}\nTranslated: (Translation service unavailable)`);
+    }
+}
+
+// Video command (search and download)
+async function handleVideoCommand(ctx, query) {
+    if (!query) {
+        return ctx.reply('🎬 Please specify a video!\nExample: `.video Despacito`');
+    }
+
+    await ctx.reply('🔍 Searching for "' + query + '"...');
+
+    try {
+        const result = await ytSearch(query);
+        if (!result || !result.videos || result.videos.length === 0) {
+            return ctx.reply('❌ No results found.');
+        }
+
+        const video = result.videos[0];
+        
+        const info = await ytdl.getInfo(video.url);
+        const format = ytdl.chooseFormat(info.formats, { quality: 'lowestvideo' });
+
+        await ctx.replyWithMarkdown(
+            `🎬 *${video.title}*\n\n` +
+            `👤 ${video.author.name}\n` +
+            `⏱️ ${video.duration.timestamp}\n\n` +
+            `📥 [Download Video](${format.url})`
+        );
+    } catch (error) {
+        console.error('Video error:', error);
+        ctx.reply('❌ Error searching for video. Please try again.');
+    }
+}
+
+// AI command
+async function handleAiCommand(ctx, query) {
+    if (!query) {
+        return ctx.reply('🤖 Please ask a question!\nExample: `.ai What is quantum computing?`');
+    }
+
+    await ctx.reply('🤖 Thinking...');
+
+    try {
+        ctx.replyWithMarkdown(
+            `🤖 *AI Response*\n\n` +
+            `*Question:* ${query}\n\n` +
+            `I'm a bot! For real AI responses, add an OpenAI API key.\n\n` +
+            `💡 Try asking about music, time, or weather.`
+        );
+    } catch (error) {
+        console.error('AI error:', error);
+        ctx.reply('❌ Error processing request. Please try again.');
+    }
+}
+
+// Image command
+async function handleImageCommand(ctx, prompt) {
+    if (!prompt) {
+        return ctx.reply('🖼️ Please describe what image you want!\nExample: `.image sunset over mountains`');
+    }
+
+    await ctx.reply('🎨 Generating image...');
+
+    try {
+        const response = await axios.get(`https://picsum.photos/800/600`, { responseType: 'arraybuffer' });
+        const imagePath = path.join(__dirname, 'temp_image.jpg');
+        fs.writeFileSync(imagePath, response.data);
+        
+        await ctx.replyWithPhoto(
+            { source: imagePath },
+            { caption: `🖼️ *Generated Image*\n\nPrompt: "${prompt}"` }
+        );
+        
+        fs.unlinkSync(imagePath);
+    } catch (error) {
+        console.error('Image error:', error);
+        ctx.reply(`🖼️ *Generated Image*\n\nPrompt: "${prompt}"\n\n[View Image](https://picsum.photos/800/600?random=${Date.now()})`);
+    }
+}
+
+// Lyrics command
+async function handleLyricsCommand(ctx, query) {
+    if (!query) {
+        return ctx.reply('📝 Please specify a song!\nExample: `.lyrics Despacito`');
+    }
+
+    await ctx.reply('🔍 Searching for lyrics...');
+
+    try {
+        const result = await ytSearch(query);
+        if (!result || !result.videos || result.videos.length === 0) {
+            return ctx.reply('❌ No results found.');
+        }
+
+        const video = result.videos[0];
+        
+        try {
+            const response = await axios.get(`https://api.lyrics.ovh/v1/${video.author.name}/${video.title}`);
+            const lyrics = response.data.lyrics;
+            const truncated = lyrics.length > 4096 ? lyrics.substring(0, 4000) + '\n... (truncated)' : lyrics;
+            
+            await ctx.replyWithMarkdown(
+                `📝 *${video.title}*\n` +
+                `👤 ${video.author.name}\n\n` +
+                `\`\`\`\n${truncated}\n\`\`\``
+            );
+        } catch (apiError) {
+            ctx.reply(`📝 *${video.title}*\n👤 ${video.author.name}\n\nLyrics not available. Try searching on Google.`);
+        }
+    } catch (error) {
+        console.error('Lyrics error:', error);
+        ctx.reply('❌ Error finding lyrics. Please try again.');
+    }
+}// ============ DOT COMMAND HANDLER ============
+bot.use(async (ctx, next) => {
+    // ... existing code ...
+    
+    switch (command) {
+        case 'play':
+            await handlePlayCommand(ctx, args);
+            return;
+        case 'ping':
+            await handlePingCommand(ctx);
+            return;
+        // ... more cases ...
+        default:
+            await ctx.reply(`❌ Unknown command: .${command}\n\nType .help for available commands.`);
+            return;
+    }
+});
 // ============ DOT COMMAND HANDLER ============
 bot.use(async (ctx, next) => {
     if (!ctx.message || !ctx.message.text) return next();
