@@ -1,4 +1,4 @@
-// index.js - Silent DJ Bot (Multi-User WhatsApp + Telegram)
+// index.js - Silent DJ Bot (Telegram + WhatsApp Multi-User)
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
@@ -17,16 +17,15 @@ const BOT_PREFIX = process.env.BOT_PREFIX || '.';
 // ============ TELEGRAM BOT ============
 const telegramBot = new Telegraf(TELEGRAM_TOKEN);
 
-// ============ WHATSAPP SESSIONS ============
-// Store WhatsApp connections for each user
+// ============ GLOBAL VARIABLES ============
 const whatsappSessions = new Map(); // userId -> socket
+const userPairingCodes = new Map(); // userId -> pairing code
 
-// ============ GENERATE PAIRING CODE FOR ANY USER ============
-async function generatePairingCodeForUser(userId, phoneNumber) {
+// ============ WHATSAPP CONNECTION ============
+async function generatePairingCodeForUser(userId) {
     try {
         console.log(`🔑 Generating pairing code for user ${userId}...`);
         
-        // Each user gets their own session folder
         const sessionFolder = path.join('./sessions', `user_${userId}`);
         await fs.ensureDir(sessionFolder);
         
@@ -43,41 +42,41 @@ async function generatePairingCodeForUser(userId, phoneNumber) {
 
         sock.ev.on('creds.update', saveCreds);
         
-        // Handle connection
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect } = update;
             
             if (update.pairingCode) {
                 const code = update.pairingCode;
                 console.log(`🔑 User ${userId} PAIRING CODE: ${code}`);
+                userPairingCodes.set(userId, code);
                 
-                // Send pairing code to the user on Telegram
+                // Send to Telegram DM
                 try {
                     await telegramBot.telegram.sendMessage(
                         userId,
-                        `🔑 *WhatsApp Pairing Code*\n\n` +
-                        `Your pairing code is:\n\`\`\`${code}\`\`\`\n\n` +
+                        `🔑 *Your WhatsApp Pairing Code*\n\n` +
+                        `\`\`\`${code}\`\`\`\n\n` +
                         `1. Open WhatsApp on your phone\n` +
-                        `2. Go to Settings → Linked Devices → Link a Device\n` +
-                        `3. Enter the code above\n` +
-                        `4. Wait for connection...\n\n` +
-                        `⏳ The code expires in a few minutes.`
+                        `2. Settings → Linked Devices → Link a Device\n` +
+                        `3. Enter: ${code}\n\n` +
+                        `⏳ This code expires in 2 minutes.`
                     );
                 } catch (e) {
-                    console.log(`⚠️ Could not send pairing code to user ${userId}`);
+                    console.log(`⚠️ Could not send DM to user ${userId}`);
                 }
             }
             
             if (connection === 'open') {
                 console.log(`✅ WhatsApp connected for user ${userId}`);
                 whatsappSessions.set(userId, sock);
+                userPairingCodes.delete(userId);
                 
                 try {
                     await telegramBot.telegram.sendMessage(
                         userId,
                         `✅ *WhatsApp Connected!*\n\n` +
                         `Your WhatsApp is now linked to ${BOT_NAME}!\n` +
-                        `You can now use commands like ${BOT_PREFIX}play`
+                        `Send ${BOT_PREFIX}play to play music.`
                     );
                 } catch (e) {}
             }
@@ -90,11 +89,11 @@ async function generatePairingCodeForUser(userId, phoneNumber) {
                 } else {
                     console.log(`🚫 User ${userId} logged out`);
                     whatsappSessions.delete(userId);
+                    userPairingCodes.delete(userId);
                 }
             }
         });
 
-        // Handle messages for this user
         sock.ev.on('messages.upsert', async (m) => {
             const msg = m.messages[0];
             if (!msg.key.fromMe && msg.message) {
@@ -161,10 +160,16 @@ async function processCommand(text, platform, userId) {
         }
     }
     
+    // ============ HELP ============
     if (cmd === 'help' || cmd === 'h') {
-        return getHelpText();
+        return `🎵 *${BOT_NAME} Commands*\n\n` +
+               `*Music*\n${BOT_PREFIX}play <song> - Play music\n\n` +
+               `*Games*\n${BOT_PREFIX}dice - Roll dice\n${BOT_PREFIX}coinflip - Flip coin\n\n` +
+               `*Utility*\n${BOT_PREFIX}ping - Check status\n${BOT_PREFIX}time - Current time\n${BOT_PREFIX}info - Bot info\n\n` +
+               `*WhatsApp*\n${BOT_PREFIX}status - Check connection\n${BOT_PREFIX}disconnect - Disconnect WhatsApp`;
     }
     
+    // ============ UTILITY ============
     if (cmd === 'ping') {
         return '🏓 Pong! ✅';
     }
@@ -174,6 +179,11 @@ async function processCommand(text, platform, userId) {
         return `🕐 ${now.format('h:mm:ss A')}\n📅 ${now.format('MMMM D, YYYY')}`;
     }
     
+    if (cmd === 'info') {
+        return `🎵 *${BOT_NAME}*\n📱 Platform: ${platform}\n✅ Status: Online\n📦 Version: 2.0.0`;
+    }
+    
+    // ============ GAMES ============
     if (cmd === 'dice') {
         const result = Math.floor(Math.random() * 6) + 1;
         return `🎲 Rolled: *${result}*`;
@@ -184,14 +194,11 @@ async function processCommand(text, platform, userId) {
         return `🪙 *${result}!*`;
     }
     
-    if (cmd === 'info') {
-        return `🎵 *${BOT_NAME}*\n📱 Platform: ${platform}\n✅ Status: Online\n📦 Version: 2.0.0`;
-    }
-    
+    // ============ WHATSAPP CONTROLS ============
     if (cmd === 'status') {
         const isConnected = whatsappSessions.has(userId);
         return `📊 *Your Status*\n\nWhatsApp: ${isConnected ? '✅ Connected' : '❌ Not connected'}\n` +
-               `To connect: Send /pair`;
+               `To connect: Send /pair to the bot on Telegram`;
     }
     
     if (cmd === 'disconnect') {
@@ -201,7 +208,6 @@ async function processCommand(text, platform, userId) {
                 await sock.logout();
                 whatsappSessions.delete(userId);
                 
-                // Delete session folder
                 const sessionFolder = path.join('./sessions', `user_${userId}`);
                 if (await fs.pathExists(sessionFolder)) {
                     await fs.remove(sessionFolder);
@@ -218,58 +224,69 @@ async function processCommand(text, platform, userId) {
     return `❌ Unknown command: ${cmd}\nType ${BOT_PREFIX}help for commands.`;
 }
 
-// ============ HELP TEXT ============
-function getHelpText() {
-    return `🎵 *${BOT_NAME} Commands*\n\n` +
-           `*Music*\n${BOT_PREFIX}play <song> - Play music\n\n` +
-           `*Games*\n${BOT_PREFIX}dice - Roll dice\n${BOT_PREFIX}coinflip - Flip coin\n\n` +
-           `*Utility*\n${BOT_PREFIX}ping - Check status\n${BOT_PREFIX}time - Current time\n${BOT_PREFIX}info - Bot info\n\n` +
-           `*WhatsApp*\n${BOT_PREFIX}pair - Connect WhatsApp\n${BOT_PREFIX}status - Check connection\n${BOT_PREFIX}disconnect - Disconnect WhatsApp`;
-}
-
 // ============ TELEGRAM COMMANDS ============
 
-// Start command
 telegramBot.start((ctx) => {
     ctx.replyWithMarkdown(
         `🎵 *${BOT_NAME} Bot*\n\n` +
         `Welcome! I work on both Telegram and WhatsApp!\n\n` +
         `📱 To connect your WhatsApp, send:\n` +
-        `${BOT_PREFIX}pair\n\n` +
-        `Send ${BOT_PREFIX}help for all commands.`
+        `/pair\n\n` +
+        `Send /menu for all commands.`
     );
 });
 
-// Pair command - ANY USER can use this!
 telegramBot.command('pair', async (ctx) => {
     const userId = ctx.from.id;
     
-    // Check if already connected
     if (whatsappSessions.has(userId)) {
         return ctx.reply('✅ You already have WhatsApp connected!\nSend `.status` to check.');
     }
     
-    await ctx.reply(
-        '🔑 *Generating WhatsApp pairing code...*\n\n' +
-        '⏳ Please wait...'
-    );
+    await ctx.reply('🔑 *Generating WhatsApp pairing code...*\n\n⏳ Please wait...');
     
     try {
         await generatePairingCodeForUser(userId);
-        await ctx.reply(
-            '🔑 *Pairing Code Generated!*\n\n' +
-            `1. Open WhatsApp on your phone\n` +
-            `2. Go to Settings → Linked Devices → Link a Device\n` +
-            `3. Enter the 8-digit code I sent you\n\n` +
-            `📱 I sent the code to your Telegram DM.`
-        );
+        
+        // Show code in chat too (in case DM fails)
+        setTimeout(async () => {
+            const code = userPairingCodes.get(userId);
+            if (code) {
+                await ctx.reply(
+                    `🔑 *Your WhatsApp Pairing Code*\n\n` +
+                    `\`\`\`${code}\`\`\`\n\n` +
+                    `1. Open WhatsApp on your phone\n` +
+                    `2. Settings → Linked Devices → Link a Device\n` +
+                    `3. Enter the code above\n\n` +
+                    `📱 I also sent this code to your DM.`
+                );
+            } else {
+                await ctx.reply('⏳ Waiting for code... Check your DM!');
+            }
+        }, 3000);
+        
     } catch (error) {
         console.error('Pair error:', error);
         ctx.reply('❌ Error generating pairing code. Please try again.');
     }
 });
 
-// Status command
+telegramBot.command('getcode', async (ctx) => {
+    const userId = ctx.from.id;
+    const code = userPairingCodes.get(userId);
+    
+    if (!code) {
+        return ctx.reply('❌ No active pairing code found.\nSend /pair to generate one.');
+    }
+    
+    ctx.reply(
+        `🔑 *Your Pairing Code*\n\n` +
+        `\`\`\`${code}\`\`\`\n\n` +
+        `Enter this in WhatsApp:\n` +
+        `Settings → Linked Devices → Link a Device`
+    );
+});
+
 telegramBot.command('status', async (ctx) => {
     const userId = ctx.from.id;
     const isConnected = whatsappSessions.has(userId);
@@ -279,11 +296,10 @@ telegramBot.command('status', async (ctx) => {
         `WhatsApp: ${isConnected ? '✅ Connected' : '❌ Not connected'}\n` +
         `Telegram: ✅ Online\n\n` +
         `To connect WhatsApp: /pair\n` +
-        `To disconnect: /disconnect`
+        `To disconnect: .disconnect`
     );
 });
 
-// Disconnect command
 telegramBot.command('disconnect', async (ctx) => {
     const userId = ctx.from.id;
     
@@ -307,7 +323,6 @@ telegramBot.command('disconnect', async (ctx) => {
     }
 });
 
-// Menu command
 telegramBot.command('menu', (ctx) => {
     const keyboard = Markup.inlineKeyboard([
         [Markup.button.callback('🎵 Music', 'menu_music')],
@@ -319,7 +334,6 @@ telegramBot.command('menu', (ctx) => {
     ctx.replyWithMarkdown(`🎵 *${BOT_NAME} Menu*`, keyboard);
 });
 
-// Menu callbacks
 telegramBot.action('menu_music', (ctx) => {
     ctx.answerCbQuery();
     ctx.replyWithMarkdown(`🎵 *.play <song>* - Play music\n*.p <song>* - Short for play`);
@@ -340,7 +354,7 @@ telegramBot.action('menu_whatsapp', (ctx) => {
     ctx.replyWithMarkdown(
         `📱 *WhatsApp Setup*\n\n` +
         `1. Send /pair\n` +
-        `2. Get 8-digit code in DM\n` +
+        `2. Get 8-digit code\n` +
         `3. Open WhatsApp → Settings → Linked Devices\n` +
         `4. Enter the code\n\n` +
         `✅ Your WhatsApp will connect!`
@@ -348,10 +362,16 @@ telegramBot.action('menu_whatsapp', (ctx) => {
 });
 
 telegramBot.command('help', (ctx) => {
-    ctx.replyWithMarkdown(getHelpText());
+    ctx.replyWithMarkdown(
+        `🎵 *${BOT_NAME} Commands*\n\n` +
+        `*Music*\n.play <song> - Play music\n\n` +
+        `*Games*\n.dice - Roll dice\n.coinflip - Flip coin\n\n` +
+        `*Utility*\n.ping - Check status\n.time - Current time\n.info - Bot info\n\n` +
+        `*WhatsApp*\n/pair - Connect WhatsApp\n.status - Check connection\n.disconnect - Disconnect\n.getcode - Show code again`
+    );
 });
 
-// ============ ADMIN COMMANDS ============
+// ============ OWNER COMMANDS ============
 telegramBot.command('stats', async (ctx) => {
     if (ctx.from.id !== OWNER_ID) {
         return ctx.reply('❌ This command is only for the bot owner.');
