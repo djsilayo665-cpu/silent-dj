@@ -18,94 +18,136 @@ const BOT_PREFIX = process.env.BOT_PREFIX || '.';
 const telegramBot = new Telegraf(TELEGRAM_TOKEN);
 
 // ============ GLOBAL VARIABLES ============
-const whatsappSessions = new Map(); // userId -> socket
-const userPairingCodes = new Map(); // userId -> pairing code
+const whatsappSessions = new Map();
+const userPairingCodes = new Map();
 
 // ============ WHATSAPP CONNECTION ============
 async function generatePairingCodeForUser(userId) {
-    try {
-        console.log(`🔑 Generating pairing code for user ${userId}...`);
-        
-        const sessionFolder = path.join('./sessions', `user_${userId}`);
-        await fs.ensureDir(sessionFolder);
-        
-        const { state, saveCreds } = await useMultiFileAuthState(sessionFolder);
-        
-        const sock = makeWASocket({
-            auth: state,
-            printQRInTerminal: false,
-            browser: ['Silent DJ', 'Chrome', '120.0.0.0'],
-            generatePairingCode: true,
-            connectTimeoutMs: 30000,
-            defaultQueryTimeoutMs: 30000,
-        });
+    return new Promise(async (resolve, reject) => {
+        try {
+            console.log(`🔑 Generating pairing code for user ${userId}...`);
+            
+            const sessionFolder = path.join('./sessions', `user_${userId}`);
+            await fs.ensureDir(sessionFolder);
+            
+            const { state, saveCreds } = await useMultiFileAuthState(sessionFolder);
+            
+            const sock = makeWASocket({
+                auth: state,
+                printQRInTerminal: false,
+                browser: ['Silent DJ', 'Chrome', '120.0.0.0'],
+                connectTimeoutMs: 30000,
+                defaultQueryTimeoutMs: 30000,
+            });
 
-        sock.ev.on('creds.update', saveCreds);
-        
-        sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect } = update;
+            sock.ev.on('creds.update', saveCreds);
             
-            if (update.pairingCode) {
-                const code = update.pairingCode;
-                console.log(`🔑 User ${userId} PAIRING CODE: ${code}`);
-                userPairingCodes.set(userId, code);
+            // Handle connection updates
+            sock.ev.on('connection.update', async (update) => {
+                const { connection, lastDisconnect } = update;
                 
-                // Send to Telegram DM
-                try {
-                    await telegramBot.telegram.sendMessage(
-                        userId,
-                        `🔑 *Your WhatsApp Pairing Code*\n\n` +
-                        `\`\`\`${code}\`\`\`\n\n` +
-                        `1. Open WhatsApp on your phone\n` +
-                        `2. Settings → Linked Devices → Link a Device\n` +
-                        `3. Enter: ${code}\n\n` +
-                        `⏳ This code expires in 2 minutes.`
-                    );
-                } catch (e) {
-                    console.log(`⚠️ Could not send DM to user ${userId}`);
+                // If we have a pairing code
+                if (update.pairingCode) {
+                    const code = update.pairingCode;
+                    console.log(`🔑 User ${userId} PAIRING CODE: ${code}`);
+                    
+                    // Store the code
+                    userPairingCodes.set(userId, code);
+                    
+                    // Send to Telegram DM
+                    try {
+                        await telegramBot.telegram.sendMessage(
+                            userId,
+                            `🔑 *Your WhatsApp Pairing Code*\n\n` +
+                            `\`\`\`${code}\`\`\`\n\n` +
+                            `1. Open WhatsApp on your phone\n` +
+                            `2. Settings → Linked Devices → Link a Device\n` +
+                            `3. Enter: ${code}\n\n` +
+                            `⏳ This code expires in 2 minutes.`
+                        );
+                    } catch (e) {
+                        console.log(`⚠️ Could not send DM to user ${userId}`);
+                    }
+                    
+                    // Also send to the chat
+                    try {
+                        await telegramBot.telegram.sendMessage(
+                            userId,
+                            `🔑 *Your WhatsApp Pairing Code*\n\n` +
+                            `\`\`\`${code}\`\`\`\n\n` +
+                            `1. Open WhatsApp on your phone\n` +
+                            `2. Settings → Linked Devices → Link a Device\n` +
+                            `3. Enter: ${code}`
+                        );
+                    } catch (e) {
+                        console.log(`⚠️ Could not send to chat`);
+                    }
+                    
+                    resolve(sock);
                 }
-            }
-            
-            if (connection === 'open') {
-                console.log(`✅ WhatsApp connected for user ${userId}`);
-                whatsappSessions.set(userId, sock);
-                userPairingCodes.delete(userId);
                 
-                try {
-                    await telegramBot.telegram.sendMessage(
-                        userId,
-                        `✅ *WhatsApp Connected!*\n\n` +
-                        `Your WhatsApp is now linked to ${BOT_NAME}!\n` +
-                        `Send ${BOT_PREFIX}play to play music.`
-                    );
-                } catch (e) {}
-            }
-            
-            if (connection === 'close') {
-                const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-                if (shouldReconnect) {
-                    console.log(`🔄 Reconnecting for user ${userId}...`);
-                    setTimeout(() => generatePairingCodeForUser(userId), 5000);
-                } else {
-                    console.log(`🚫 User ${userId} logged out`);
-                    whatsappSessions.delete(userId);
+                if (connection === 'open') {
+                    console.log(`✅ WhatsApp connected for user ${userId}`);
+                    whatsappSessions.set(userId, sock);
                     userPairingCodes.delete(userId);
+                    
+                    try {
+                        await telegramBot.telegram.sendMessage(
+                            userId,
+                            `✅ *WhatsApp Connected!*\n\n` +
+                            `Your WhatsApp is now linked to ${BOT_NAME}!`
+                        );
+                    } catch (e) {}
                 }
-            }
-        });
+                
+                if (connection === 'close') {
+                    const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+                    if (shouldReconnect) {
+                        console.log(`🔄 Reconnecting for user ${userId}...`);
+                        setTimeout(() => generatePairingCodeForUser(userId), 5000);
+                    } else {
+                        console.log(`🚫 User ${userId} logged out`);
+                        whatsappSessions.delete(userId);
+                        userPairingCodes.delete(userId);
+                    }
+                }
+            });
 
-        sock.ev.on('messages.upsert', async (m) => {
-            const msg = m.messages[0];
-            if (!msg.key.fromMe && msg.message) {
-                await handleWhatsAppMessage(msg, sock, userId);
-            }
-        });
+            sock.ev.on('messages.upsert', async (m) => {
+                const msg = m.messages[0];
+                if (!msg.key.fromMe && msg.message) {
+                    await handleWhatsAppMessage(msg, sock, userId);
+                }
+            });
 
-        return sock;
-    } catch (error) {
-        console.error(`❌ Error for user ${userId}:`, error);
-        throw error;
-    }
+            // Generate pairing code manually
+            try {
+                // Request pairing code with the user's phone number if available
+                const phoneNumber = process.env.WHATSAPP_NUMBER || '';
+                if (phoneNumber) {
+                    await sock.requestPairingCode(phoneNumber);
+                } else {
+                    // Fallback: generate without phone number
+                    console.log('📱 No phone number provided, waiting for pairing code...');
+                }
+            } catch (error) {
+                console.log('⚠️ Manual pairing request failed, waiting for automatic...');
+            }
+
+            // Set timeout to resolve if code is generated
+            setTimeout(() => {
+                if (!userPairingCodes.has(userId)) {
+                    console.log(`⚠️ Timeout waiting for pairing code for user ${userId}`);
+                    // Try generating code again
+                    generatePairingCodeForUser(userId);
+                }
+            }, 10000);
+
+        } catch (error) {
+            console.error(`❌ Error for user ${userId}:`, error);
+            reject(error);
+        }
+    });
 }
 
 // ============ WHATSAPP MESSAGE HANDLER ============
@@ -166,7 +208,7 @@ async function processCommand(text, platform, userId) {
                `*Music*\n${BOT_PREFIX}play <song> - Play music\n\n` +
                `*Games*\n${BOT_PREFIX}dice - Roll dice\n${BOT_PREFIX}coinflip - Flip coin\n\n` +
                `*Utility*\n${BOT_PREFIX}ping - Check status\n${BOT_PREFIX}time - Current time\n${BOT_PREFIX}info - Bot info\n\n` +
-               `*WhatsApp*\n${BOT_PREFIX}status - Check connection\n${BOT_PREFIX}disconnect - Disconnect WhatsApp`;
+               `*WhatsApp*\n/pair - Connect WhatsApp\n.status - Check connection\n.disconnect - Disconnect\n.getcode - Show code again`;
     }
     
     // ============ UTILITY ============
@@ -248,22 +290,29 @@ telegramBot.command('pair', async (ctx) => {
     try {
         await generatePairingCodeForUser(userId);
         
-        // Show code in chat too (in case DM fails)
-        setTimeout(async () => {
+        // Wait for code and show it
+        let attempts = 0;
+        const checkCode = setInterval(async () => {
             const code = userPairingCodes.get(userId);
             if (code) {
+                clearInterval(checkCode);
                 await ctx.reply(
                     `🔑 *Your WhatsApp Pairing Code*\n\n` +
                     `\`\`\`${code}\`\`\`\n\n` +
                     `1. Open WhatsApp on your phone\n` +
                     `2. Settings → Linked Devices → Link a Device\n` +
-                    `3. Enter the code above\n\n` +
-                    `📱 I also sent this code to your DM.`
+                    `3. Enter the code above`
                 );
-            } else {
-                await ctx.reply('⏳ Waiting for code... Check your DM!');
+            } else if (attempts > 10) {
+                clearInterval(checkCode);
+                await ctx.reply(
+                    '⚠️ *Still waiting for pairing code...*\n\n' +
+                    'Make sure you have a stable internet connection.\n' +
+                    'If this continues, try `/pair` again in 30 seconds.'
+                );
             }
-        }, 3000);
+            attempts++;
+        }, 2000);
         
     } catch (error) {
         console.error('Pair error:', error);
