@@ -1,0 +1,149 @@
+// ============================================
+// SILENT DJ BOT — Telegram + WhatsApp
+// ============================================
+
+const { Telegraf } = require('telegraf');
+const { makeWASocket, useMultiFileAuthState } = require('@whiskeysockets/baileys');
+const fs = require('fs');
+
+// ============================================
+// CONFIGURATION
+// ============================================
+const TELEGRAM_TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN'; // From @BotFather
+const TELEGRAM_BOT = new Telegraf(TELEGRAM_TOKEN);
+
+// Store pairing codes (in memory — use database for production)
+const pairings = {};
+
+// ============================================
+// TELEGRAM BOT — Gives Pairing Codes
+// ============================================
+
+// Start command
+TELEGRAM_BOT.start(async (ctx) => {
+    const userId = ctx.from.id;
+    const code = Math.floor(100000 + Math.random() * 900000); // 6-digit code
+    
+    pairings[code] = {
+        telegramId: userId,
+        username: ctx.from.username || 'unknown',
+        createdAt: Date.now()
+    };
+    
+    await ctx.reply(`
+🎧 *Silent DJ Bot Pairing*
+
+Your pairing code: *${code}*
+
+📌 *How to pair:*
+1. Open WhatsApp
+2. Go to Settings → Linked Devices
+3. Tap "Link a Device"
+4. Enter this code: ${code}
+
+⚠️ This code expires in 5 minutes.
+    `, { parse_mode: 'Markdown' });
+    
+    // Auto-expire after 5 minutes
+    setTimeout(() => {
+        if (pairings[code]) {
+            delete pairings[code];
+        }
+    }, 300000); // 5 minutes
+});
+
+// ============================================
+// WHATSAPP BOT — Waits for pairing
+// ============================================
+
+async function startWhatsApp() {
+    const { state, saveCreds } = await useMultiFileAuthState('./session');
+    
+    const sock = makeWASocket({
+        auth: state,
+        printQRInTerminal: false,
+        browser: ['Silent DJ', 'Chrome', '1.0.0']
+    });
+    
+    sock.ev.on('connection.update', async ({ pairingCode, connection }) => {
+        if (pairingCode) {
+            console.log(`🔐 WhatsApp Pairing Code: ${pairingCode}`);
+            // You can also send this to Telegram if needed
+        }
+        
+        if (connection === 'open') {
+            console.log('✅ WhatsApp connected!');
+            // Send confirmation to Telegram owner
+            TELEGRAM_BOT.telegram.sendMessage(OWNER_TELEGRAM_ID, '✅ WhatsApp bot is online!');
+        }
+    });
+    
+    sock.ev.on('creds.update', saveCreds);
+    
+    // Handle incoming WhatsApp messages
+    sock.ev.on('messages.upsert', async (m) => {
+        const msg = m.messages[0];
+        if (!msg.message || msg.key.fromMe) return;
+        
+        const sender = msg.key.remoteJid;
+        const text = msg.message.conversation || '';
+        
+        console.log(`📩 WhatsApp: ${text} from ${sender}`);
+        
+        // Respond to commands
+        if (text === '.ping') {
+            await sock.sendMessage(sender, { text: '🏓 Pong!' });
+        }
+        
+        if (text === '.help') {
+            await sock.sendMessage(sender, { 
+                text: `🎧 Silent DJ Bot Commands:
+.ping — Check bot status
+.help — Show this menu
+.alive — Check if bot is online
+.pair — Get pairing code`
+            });
+        }
+        
+        if (text === '.pair') {
+            // Generate pairing code for WhatsApp user
+            const code = Math.floor(100000 + Math.random() * 900000);
+            await sock.sendMessage(sender, { 
+                text: `🔐 Your pairing code: ${code}\nValid for 5 minutes.`
+            });
+        }
+    });
+    
+    // Ask for phone number to get pairing code
+    const readline = require('readline');
+    const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout
+    });
+    
+    const question = (q) => new Promise(resolve => rl.question(q, resolve));
+    const phone = await question('📱 Enter your WhatsApp number (e.g., 255768192847): ');
+    await sock.requestPairingCode(phone);
+}
+
+// ============================================
+// START BOTH BOTS
+// ============================================
+
+console.log('🎧 Starting Silent DJ Bot...');
+
+// Start Telegram bot
+TELEGRAM_BOT.launch()
+    .then(() => console.log('✅ Telegram bot is running'))
+    .catch(err => console.error('❌ Telegram error:', err));
+
+// Start WhatsApp bot
+startWhatsApp()
+    .then(() => console.log('✅ WhatsApp bot is running'))
+    .catch(err => console.error('❌ WhatsApp error:', err));
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+    TELEGRAM_BOT.stop('SIGINT');
+    process.exit(0);
+});
