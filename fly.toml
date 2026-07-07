@@ -1,12 +1,16 @@
-app = "silent-dj-okjz-q"
-primary_region = "jnb"
+app = "silent-dj-bot"
+primary_region = "ewr"
 
 [build]
-  # Use Dockerfile instead of buildpacks
-  builder = "dockerfile"
 
 [env]
   NODE_ENV = "production"
 
-[experimental]
-  cmd = ["node", "index.js"]
+[http_service]
+  internal_port = 3000
+  force_https = true
+
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1
